@@ -250,6 +250,11 @@ void *qemu_ram_mmap(int fd,
                     uint32_t qemu_map_flags,
                     off_t map_offset)
 {
+#if defined(EMSCRIPTEN)
+    void *ptr;
+    ptr = mmap_activate(0, size + align, fd, qemu_map_flags, map_offset);
+    return (void *)QEMU_ALIGN_UP((uintptr_t)ptr, align);
+#else
     const size_t guard_pagesize = mmap_guard_pagesize(fd);
     size_t offset, total;
     void *ptr, *guardptr;
@@ -292,6 +297,7 @@ void *qemu_ram_mmap(int fd,
     }
 
     return ptr;
+#endif
 }
 
 void qemu_ram_munmap(int fd, void *ptr, size_t size)

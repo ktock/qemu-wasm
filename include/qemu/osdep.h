@@ -133,7 +133,7 @@ QEMU_EXTERN_C int daemon(int, int);
 #include <setjmp.h>
 #include <signal.h>
 
-#ifdef CONFIG_IOVEC
+#if defined(CONFIG_IOVEC) || defined(EMSCRIPTEN)
 #include <sys/uio.h>
 #endif
 
@@ -281,6 +281,7 @@ void QEMU_ERROR("code path is reachable")
 #ifndef WCOREDUMP
 #define WCOREDUMP(status) 0
 #endif
+#ifndef EMSCRIPTEN
 /*
  * We have a lot of unaudited code that may fail in strange ways, or
  * even be a security risk during migration, if you disable assertions
@@ -295,6 +296,7 @@ void QEMU_ERROR("code path is reachable")
 #endif
 #ifdef G_DISABLE_ASSERT
 #error building with G_DISABLE_ASSERT is not supported
+#endif
 #endif
 
 #ifndef O_LARGEFILE
@@ -609,7 +611,7 @@ bool qemu_write_pidfile(const char *pidfile, Error **errp);
 
 int qemu_get_thread_id(void);
 
-#ifndef CONFIG_IOVEC
+#if !defined(CONFIG_IOVEC) && !defined(EMSCRIPTEN)
 struct iovec {
     void *iov_base;
     size_t iov_len;

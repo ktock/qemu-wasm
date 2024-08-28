@@ -56,7 +56,7 @@ qapi_trace_events = []
 bsd_oses = ['gnu/kfreebsd', 'freebsd', 'netbsd', 'openbsd', 'dragonfly', 'darwin']
 supported_oses = ['windows', 'freebsd', 'netbsd', 'openbsd', 'darwin', 'sunos', 'linux']
 supported_cpus = ['ppc', 'ppc64', 's390x', 'riscv32', 'riscv64', 'x86', 'x86_64',
-  'arm', 'aarch64', 'loongarch64', 'mips', 'mips64', 'sparc64']
+  'arm', 'aarch64', 'loongarch64', 'mips', 'mips64', 'sparc64', 'wasm32']
 
 cpu = host_machine.cpu_family()
 
@@ -191,25 +191,25 @@ endif
 # Compiler flags #
 ##################
 
-foreach lang : all_languages
-  compiler = meson.get_compiler(lang)
-  if compiler.get_id() == 'gcc' and compiler.version().version_compare('>=7.4')
-    # ok
-  elif compiler.get_id() == 'clang' and compiler.compiles('''
-      #ifdef __apple_build_version__
-      # if __clang_major__ < 12 || (__clang_major__ == 12 && __clang_minor__ < 0)
-      #  error You need at least XCode Clang v12.0 to compile QEMU
-      # endif
-      #else
-      # if __clang_major__ < 10 || (__clang_major__ == 10 && __clang_minor__ < 0)
-      #  error You need at least Clang v10.0 to compile QEMU
-      # endif
-      #endif''')
-    # ok
-  else
-    error('You either need GCC v7.4 or Clang v10.0 (or XCode Clang v12.0) to compile QEMU')
-  endif
-endforeach
+#foreach lang : all_languages
+#  compiler = meson.get_compiler(lang)
+#  if compiler.get_id() == 'gcc' and compiler.version().version_compare('>=7.4')
+#    # ok
+#  elif compiler.get_id() == 'clang' and compiler.compiles('''
+#      #ifdef __apple_build_version__
+#      # if __clang_major__ < 12 || (__clang_major__ == 12 && __clang_minor__ < 0)
+#      #  error You need at least XCode Clang v12.0 to compile QEMU
+#      # endif
+#      #else
+#      # if __clang_major__ < 10 || (__clang_major__ == 10 && __clang_minor__ < 0)
+#      #  error You need at least Clang v10.0 to compile QEMU
+#      # endif
+#      #endif''')
+#    # ok
+#  else
+#    error('You either need GCC v7.4 or Clang v10.0 (or XCode Clang v12.0) to compile QEMU')
+#  endif
+#endforeach
 
 # default flags for all hosts
 # We use -fwrapv to tell the compiler that we require a C dialect where
@@ -317,7 +317,7 @@ ucontext_probe = '''
 # On Windows the only valid backend is the Windows specific one.
 # For POSIX prefer ucontext, but it's not always possible. The fallback
 # is sigcontext.
-supported_backends = []
+supported_backends = ['fiber']
 if targetos == 'windows'
   supported_backends += ['windows']
 else
@@ -345,19 +345,19 @@ safe_stack_probe = '''
   #endif
       return 0;
   }'''
-if get_option('safe_stack') != not cc.compiles(safe_stack_probe)
-  safe_stack_arg = get_option('safe_stack') ? '-fsanitize=safe-stack' : '-fno-sanitize=safe-stack'
-  if get_option('safe_stack') != not cc.compiles(safe_stack_probe, args: safe_stack_arg)
-    error(get_option('safe_stack') \
-          ? 'SafeStack not supported by your compiler' \
-          : 'Cannot disable SafeStack')
-  endif
-  qemu_cflags += safe_stack_arg
-  qemu_ldflags += safe_stack_arg
-endif
-if get_option('safe_stack') and coroutine_backend != 'ucontext'
-  error('SafeStack is only supported with the ucontext coroutine backend')
-endif
+#if get_option('safe_stack') != not cc.compiles(safe_stack_probe)
+#  safe_stack_arg = get_option('safe_stack') ? '-fsanitize=safe-stack' : '-fno-sanitize=safe-stack'
+#  if get_option('safe_stack') != not cc.compiles(safe_stack_probe, args: safe_stack_arg)
+#    error(get_option('safe_stack') \
+#          ? 'SafeStack not supported by your compiler' \
+#          : 'Cannot disable SafeStack')
+#  endif
+#  qemu_cflags += safe_stack_arg
+#  qemu_ldflags += safe_stack_arg
+#endif
+#if get_option('safe_stack') and coroutine_backend != 'ucontext'
+#  error('SafeStack is only supported with the ucontext coroutine backend')
+#endif
 
 if get_option('sanitizers')
   if cc.has_argument('-fsanitize=address')
@@ -680,6 +680,9 @@ if get_option('tcg').allowed()
     tcg_arch = 'i386'
   elif host_arch == 'ppc64'
     tcg_arch = 'ppc'
+  elif host_arch == 'wasm32'
+    tcg_arch = 'wasm32'
+    #config_host += { 'CONFIG_TCG_INTERPRETER': 'y' }
   endif
   add_project_arguments('-iquote', meson.current_source_dir() / 'tcg' / tcg_arch,
                         language: all_languages)
@@ -726,26 +729,26 @@ if targetos == 'windows' and get_option('prefer_static')
   glib_cflags += ['-DGLIB_STATIC_COMPILATION']
 endif
 
-# Sanity check that the current size_t matches the
-# size that glib thinks it should be. This catches
-# problems on multi-arch where people try to build
-# 32-bit QEMU while pointing at 64-bit glib headers
-
-if not cc.compiles('''
-  #include <glib.h>
-  #include <unistd.h>
-
-  #define QEMU_BUILD_BUG_ON(x) \
-  typedef char qemu_build_bug_on[(x)?-1:1] __attribute__((unused));
-
-  int main(void) {
-     QEMU_BUILD_BUG_ON(sizeof(size_t) != GLIB_SIZEOF_SIZE_T);
-     return 0;
-  }''', dependencies: glib_pc, args: glib_cflags)
-  error('''sizeof(size_t) doesn't match GLIB_SIZEOF_SIZE_T.
-        You probably need to set PKG_CONFIG_LIBDIR" to point
-        to the right pkg-config files for your build target.''')
-endif
+## Sanity check that the current size_t matches the
+## size that glib thinks it should be. This catches
+## problems on multi-arch where people try to build
+## 32-bit QEMU while pointing at 64-bit glib headers
+#
+#if not cc.compiles('''
+#  #include <glib.h>
+#  #include <unistd.h>
+#
+#  #define QEMU_BUILD_BUG_ON(x) \
+#  typedef char qemu_build_bug_on[(x)?-1:1] __attribute__((unused));
+#
+#  int main(void) {
+#     QEMU_BUILD_BUG_ON(sizeof(size_t) != GLIB_SIZEOF_SIZE_T);
+#     return 0;
+#  }''', dependencies: glib_pc, args: glib_cflags)
+#  error('''sizeof(size_t) doesn't match GLIB_SIZEOF_SIZE_T.
+#        You probably need to set PKG_CONFIG_LIBDIR" to point
+#        to the right pkg-config files for your build target.''')
+#endif
 
 # Silence clang warnings triggered by glib < 2.57.2
 if not cc.compiles('''

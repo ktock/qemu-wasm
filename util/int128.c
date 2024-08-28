@@ -144,7 +144,7 @@ Int128 int128_rems(Int128 a, Int128 b)
     return r;
 }
 
-#elif defined(CONFIG_TCG_INTERPRETER)
+#elif defined(CONFIG_TCG_INTERPRETER) || defined(EMSCRIPTEN)
 
 Int128 int128_divu(Int128 a_s, Int128 b_s)
 {

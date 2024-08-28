@@ -145,7 +145,7 @@ static void initialize_debug_host(CPUDebug *s)
 #else
     s->info.endian = BFD_ENDIAN_LITTLE;
 #endif
-#if defined(CONFIG_TCG_INTERPRETER)
+#if defined(CONFIG_TCG_INTERPRETER) || defined(EMSCRIPTEN)
     s->info.print_insn = print_insn_tci;
 #elif defined(__i386__)
     s->info.mach = bfd_mach_i386_i386;

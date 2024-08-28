@@ -147,11 +147,13 @@ static void change_process_uid(void)
             exit(1);
         }
         if (user_pwd) {
+#ifndef EMSCRIPTEN
             if (initgroups(user_pwd->pw_name, user_pwd->pw_gid) < 0) {
                 error_report("Failed to initgroups(\"%s\", %d)",
                         user_pwd->pw_name, user_pwd->pw_gid);
                 exit(1);
             }
+#endif
         } else {
             if (setgroups(1, &user_gid) < 0) {
                 error_report("Failed to setgroups(1, [%d])",

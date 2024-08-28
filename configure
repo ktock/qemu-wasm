@@ -514,6 +514,8 @@ case "$cpu" in
     # runtime and generate the fallback to serial emulation.
     CPU_CFLAGS="-m64 -mcx16"
     ;;
+  wasm32)
+    CPU_CFLAGS="-m32" ;;
 esac
 
 if test -n "$host_arch" && {
@@ -998,13 +1000,13 @@ if test -z "$ninja"; then
     fi
 fi
 
-if test "$targetos" = "bogus"; then
-    # Now that we know that we're not printing the help and that
-    # the compiler works (so the results of the check_defines we used
-    # to identify the OS are reliable), if we didn't recognize the
-    # host OS we should stop now.
-    error_exit "Unrecognized host OS (uname -s reports '$(uname -s)')"
-fi
+# if test "$targetos" = "bogus"; then
+#     # Now that we know that we're not printing the help and that
+#     # the compiler works (so the results of the check_defines we used
+#     # to identify the OS are reliable), if we didn't recognize the
+#     # host OS we should stop now.
+#     error_exit "Unrecognized host OS (uname -s reports '$(uname -s)')"
+# fi
 
 # test for any invalid configuration combinations
 if test "$targetos" = "windows" && ! has "$dlltool"; then

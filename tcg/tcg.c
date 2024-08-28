@@ -131,6 +131,10 @@ static void tcg_out_goto_tb(TCGContext *s, int which);
 static void tcg_out_op(TCGContext *s, TCGOpcode opc,
                        const TCGArg args[TCG_MAX_OP_ARGS],
                        const int const_args[TCG_MAX_OP_ARGS]);
+#if defined(EMSCRIPTEN) && !defined(CONFIG_TCG_INTERPRETER)
+static void tcg_out_label_cb(TCGContext *s, TCGLabel *l);
+static void tcg_out_init();
+#endif
 #if TCG_TARGET_MAYBE_vec
 static bool tcg_out_dup_vec(TCGContext *s, TCGType type, unsigned vece,
                             TCGReg dst, TCGReg src);
@@ -244,7 +248,7 @@ TCGv_env tcg_env;
 const void *tcg_code_gen_epilogue;
 uintptr_t tcg_splitwx_diff;
 
-#ifndef CONFIG_TCG_INTERPRETER
+#if !defined(CONFIG_TCG_INTERPRETER) && !defined(EMSCRIPTEN)
 tcg_prologue_fn *tcg_qemu_tb_exec;
 #endif
 
@@ -351,6 +355,9 @@ static void tcg_out_label(TCGContext *s, TCGLabel *l)
     tcg_debug_assert(!l->has_value);
     l->has_value = 1;
     l->u.value_ptr = tcg_splitwx_to_rx(s->code_ptr);
+#if defined(EMSCRIPTEN) && !defined(CONFIG_TCG_INTERPRETER)
+    tcg_out_label_cb(s, l);
+#endif
 }
 
 TCGLabel *gen_new_label(void)
@@ -418,6 +425,114 @@ tlb_mask_table_ofs(TCGContext *s, int which)
     return (offsetof(CPUNegativeOffsetState, tlb.f[which]) -
             sizeof(CPUNegativeOffsetState));
 }
+
+#if defined(EMSCRIPTEN) && !defined(CONFIG_TCG_INTERPRETER)
+
+#define LABEL_MAX 200
+
+struct label_placeholder {
+    int label;
+    uintptr_t ptr;
+};
+
+struct label_context {
+    int block_idx;
+};
+
+#define WASM_NUM_HELPER_FUNCS_MAX 200
+#define WASM_HELPER_ADDED_TYPES_SECTION_MAX 200
+__thread uint32_t num_helper_funcs;
+__thread uint32_t target_helper_funcs[WASM_NUM_HELPER_FUNCS_MAX];
+__thread uint8_t target_helper_types[WASM_HELPER_ADDED_TYPES_SECTION_MAX];
+__thread int target_helper_types_pos;
+__thread int wasm_block_idx;
+__thread struct label_placeholder block_ptr_placeholder[LABEL_MAX];
+__thread int block_ptr_placeholder_idx_pos;
+__thread int label_to_block[LABEL_MAX];
+
+static int wasm_block_current_idx(TCGContext *s)
+{
+    return wasm_block_idx;
+}
+
+static int wasm_alloc_block_idx(TCGContext *s)
+{
+    return ++wasm_block_idx;
+}
+
+static void fill_uint32_leb128(uintptr_t bi, uint32_t v) {
+    uint8_t *b = (uint8_t *)bi;
+    uint32_t low7 = 0x7f;
+    // assuems higher bit already written as placeholders
+    do {
+        *b |= v & low7;
+        v >>= 7;
+        b++;
+    } while (v != 0);
+}
+
+static int write_uint32_leb128(uintptr_t bi, uint32_t v) {
+    uint8_t *b = (uint8_t *)bi;
+    uint32_t low7 = 0x7f;
+    do {
+        *b = (uint8_t)(v & low7);
+        v >>= 7;
+        if (v != 0)
+            *b |= 0x80;
+        b++;
+    } while (v != 0);
+
+    return (int)((uintptr_t)b - (uintptr_t)bi);
+}
+
+static uint8_t * wasm_get_helper_types_begin(TCGContext *s)
+{
+    return &(target_helper_types[target_helper_types_pos]);
+}
+
+static void wasm_add_helper_types_pos(TCGContext *s, int i)
+{
+    target_helper_types_pos += i;
+    tcg_debug_assert(target_helper_types_pos <= WASM_HELPER_ADDED_TYPES_SECTION_MAX);
+}
+
+static int wasm_register_helper_alloc_num(TCGContext *s)
+{
+    tcg_debug_assert(num_helper_funcs <= WASM_NUM_HELPER_FUNCS_MAX);
+    return num_helper_funcs++;
+}
+
+static void wasm_register_helper(TCGContext *s, int idx_on_tb, int helper_idx_on_qemu)
+{
+    tcg_debug_assert(idx_on_tb <= WASM_NUM_HELPER_FUNCS_MAX);
+    target_helper_funcs[idx_on_tb] = helper_idx_on_qemu;
+}
+
+static int get_wasm_helper_idx(TCGContext *s, int helper_idx_on_qemu)
+{
+    for (int i = 0; i < num_helper_funcs; i++) {
+        if (target_helper_funcs[i] == helper_idx_on_qemu) {
+            return i;
+        }
+    }
+    return -1;
+}
+
+static void wasm_add_label_context(TCGContext *s, int label, int block)
+{
+    tcg_debug_assert(label <= LABEL_MAX);
+    label_to_block[label] = block;
+}
+
+static void wasm_add_label_block_ptr_placeholder(TCGContext *s, int label)
+{
+    int i = block_ptr_placeholder_idx_pos++;
+    tcg_debug_assert(i <= LABEL_MAX);
+    block_ptr_placeholder[i].label = label;
+    block_ptr_placeholder[i].ptr = (uintptr_t)s->code_ptr;;
+}
+
+#endif
 
 /* Signal overflow, starting over with fewer guest insns. */
 static G_NORETURN
@@ -941,7 +1056,7 @@ static TCGHelperInfo info_helper_st128_mmu = {
               | dh_typemask(ptr, 5)  /* uintptr_t ra */
 };
 
-#ifdef CONFIG_TCG_INTERPRETER
+#if defined(CONFIG_TCG_INTERPRETER)
 static ffi_type *typecode_to_ffi(int argmask)
 {
     /*
@@ -1413,12 +1528,11 @@ void tcg_prologue_init(void)
 {
     TCGContext *s = tcg_ctx;
     size_t prologue_size;
-
     s->code_ptr = s->code_gen_ptr;
     s->code_buf = s->code_gen_ptr;
     s->data_gen_ptr = NULL;
 
-#ifndef CONFIG_TCG_INTERPRETER
+#if !defined(CONFIG_TCG_INTERPRETER) && !defined(EMSCRIPTEN)
     tcg_qemu_tb_exec = (tcg_prologue_fn *)tcg_splitwx_to_rx(s->code_ptr);
 #endif
 
@@ -1441,7 +1555,7 @@ void tcg_prologue_init(void)
     prologue_size = tcg_current_code_size(s);
     perf_report_prologue(s->code_gen_ptr, prologue_size);
 
-#ifndef CONFIG_TCG_INTERPRETER
+#if !defined(CONFIG_TCG_INTERPRETER) && !defined(EMSCRIPTEN)
     flush_idcache_range((uintptr_t)tcg_splitwx_to_rx(s->code_buf),
                         (uintptr_t)s->code_buf, prologue_size);
 #endif
@@ -1478,7 +1592,7 @@ void tcg_prologue_init(void)
         }
     }
 
-#ifndef CONFIG_TCG_INTERPRETER
+#if !defined(CONFIG_TCG_INTERPRETER) && !defined(EMSCRIPTEN)
     /*
      * Assert that goto_ptr is implemented completely, setting an epilogue.
      * For tci, we use NULL as the signal to return from the interpreter,
@@ -5827,6 +5941,151 @@ static void tcg_out_ld_helper_args(TCGContext *s, const TCGLabelQemuLdst *ldst,
     tcg_out_helper_load_common_args(s, ldst, parm, info, next_arg);
 }
 
+#if defined(EMSCRIPTEN) && !defined(CONFIG_TCG_INTERPRETER)
+
+static const uint8_t mod_header_a[] = {
+    0x0, 0x61, 0x73, 0x6d,               // magic
+    0x01, 0x0, 0x0, 0x0,                 // version
+    // type section
+    0x01, 0x80, 0x80, 0x80, 0x80, 0x00,
+    0x80, 0x80, 0x80, 0x80, 0x00,
+    0x60,
+    0x01, 0x7f,
+    0x01, 0x7f,
+    
+};
+static const uint8_t mod_header_b[] = {
+    // import section
+    0x02, 0x80, 0x80, 0x80, 0x80, 0x00,
+    0x80, 0x80, 0x80, 0x80, 0x00,
+    0x03, 0x65, 0x6e, 0x76,
+    0x06, 0x62, 0x75, 0x66, 0x66, 0x65, 0x72,
+    0x02, 0x03, 0x00, 0x80, 0x80, 0x80, 0x80, 0x00,
+};
+
+static const uint8_t mod_header_c[] = {
+    // function section
+    0x03, 2, 1, 0x00,
+    // global section
+    0x06, 0x7e,
+    25,
+    0x7e, 0x01, 0x42, 0x00, 0x0b,
+    0x7e, 0x01, 0x42, 0x00, 0x0b,
+    0x7e, 0x01, 0x42, 0x00, 0x0b,
+    0x7e, 0x01, 0x42, 0x00, 0x0b,
+    0x7e, 0x01, 0x42, 0x00, 0x0b,
+    0x7e, 0x01, 0x42, 0x00, 0x0b,
+    0x7e, 0x01, 0x42, 0x00, 0x0b,
+    0x7e, 0x01, 0x42, 0x00, 0x0b,
+    0x7e, 0x01, 0x42, 0x00, 0x0b,
+    0x7e, 0x01, 0x42, 0x00, 0x0b,
+    0x7e, 0x01, 0x42, 0x00, 0x0b,
+    0x7e, 0x01, 0x42, 0x00, 0x0b,
+    0x7e, 0x01, 0x42, 0x00, 0x0b,
+    0x7e, 0x01, 0x42, 0x00, 0x0b,
+    0x7e, 0x01, 0x42, 0x00, 0x0b,
+    0x7e, 0x01, 0x42, 0x00, 0x0b,
+    0x7e, 0x01, 0x42, 0x00, 0x0b,
+    0x7e, 0x01, 0x42, 0x00, 0x0b,
+    0x7e, 0x01, 0x42, 0x00, 0x0b,
+    0x7e, 0x01, 0x42, 0x00, 0x0b,
+    0x7e, 0x01, 0x42, 0x00, 0x0b,
+    0x7e, 0x01, 0x42, 0x00, 0x0b,
+    0x7e, 0x01, 0x42, 0x00, 0x0b,
+    0x7e, 0x01, 0x42, 0x00, 0x0b,
+    0x7e, 0x01, 0x42, 0x00, 0x0b,
+    // export section
+    0x07, 13,
+    1,
+    0x05, 0x73, 0x74, 0x61, 0x72, 0x74,
+    0x00, 0x80, 0x80, 0x80, 0x80, 0x00,
+};
+
+static const uint8_t mod_header_d[] = {
+    0x0a, 0x80, 0x80, 0x80, 0x80, 0x00,
+    0x80, 0x80, 0x80, 0x80, 0x00,
+    0x80, 0x80, 0x80, 0x80, 0x00,
+
+    0x2, 0x2, 0x7f, 0x5, 0x7e,
+    
+    // initialize the instance
+    0x20, 0x0,               // local.get $ctx
+    0x28, 0, DO_INIT_OFF,    // i32.load do_init_ptr
+    0x41, 0,                 // i32.const 0
+    0x47,                    // i32.ne
+    0x04, 0x40,              // if
+
+    0x23, 14,                // global.get $env
+    0x50,                    // i64.eqz
+    0x04, 0x40,              // if
+    // fundamental variables
+    0x20, 0x0,               // local.get $ctx
+    0x28, 0, ENV_OFF,        // i32.load env
+    0xad,                    // extend
+    0x24, 14,                // global.set $14
+    0x20, 0x0,               // local.get $ctx
+    0x28, 0, STACK_OFF,      // i32.load stack
+    0xad,                    // extend
+    0x24, 15,                // global.set $15
+    0x0b,                    // end
+
+    0x20, 0x0,               // local.get $ctx
+    0x41, 0x00,              // i32.const 0
+    0x36, 0x00, DO_INIT_OFF, // i32.store do_init
+    0x42, 0x00,              // i64.const 0
+    0x24, 24,                // global.set $block_ptr
+    0x0b,                    // end
+
+    0x03, 0x40,              // loop
+    0x23, 24,                // global.get $block_ptr
+    0x50,                    // i64.eqz
+    0x04, 0x40,              // if
+};
+
+static void write_wasm_type_section_size(TCGContext *s, void *header_a_ptr, uint32_t added) {
+    uint32_t type_section_size = added + 10;
+    fill_uint32_leb128((uintptr_t)header_a_ptr + 9, type_section_size);
+    fill_uint32_leb128((uintptr_t)header_a_ptr + 14, num_helper_funcs + 1);
+}
+static void write_wasm_memory_size(TCGContext *s, void *header_b_ptr) {
+    fill_uint32_leb128((uintptr_t)header_b_ptr + 25, (uint32_t)(~0) / 65536);
+}
+static void write_wasm_import_section_size(TCGContext *s, void *header_b_ptr, uint32_t added, uint32_t num_imported_funcs) {
+    uint32_t import_section_size = 35 + added - 11;
+    fill_uint32_leb128((uintptr_t)header_b_ptr + 1, import_section_size);
+    fill_uint32_leb128((uintptr_t)header_b_ptr + 6, num_imported_funcs + 1/*buffer+helpers...*/);
+}
+static void write_wasm_export_section_size(TCGContext *s, void *header_c_ptr, uint32_t startidx) {
+    fill_uint32_leb128((uintptr_t)header_c_ptr + 142, startidx);
+}
+static void write_wasm_code_size(TCGContext *s, void *header_d_ptr, int code_size, int code_nums) {
+    code_size = code_size + 66;
+    fill_uint32_leb128((uintptr_t)header_d_ptr + 1, code_size);
+    fill_uint32_leb128((uintptr_t)header_d_ptr + 6, code_nums);
+    fill_uint32_leb128((uintptr_t)header_d_ptr + 11, code_size - 10);
+}
+
+uint8_t *tcg_out_import_entry(TCGContext *s, uint8_t* wasm_blob_ptr, int i, int typeidx)
+{
+    *wasm_blob_ptr++ = 6; // helper
+    *wasm_blob_ptr++ = 0x68;
+    *wasm_blob_ptr++ = 0x65;
+    *wasm_blob_ptr++ = 0x6c;
+    *wasm_blob_ptr++ = 0x70;
+    *wasm_blob_ptr++ = 0x65;
+    *wasm_blob_ptr++ = 0x72;
+    char buf[100];
+    int n = snprintf(buf, sizeof(buf), "%d", i);
+    wasm_blob_ptr += write_uint32_leb128((uintptr_t)wasm_blob_ptr, n);
+    memcpy(wasm_blob_ptr, buf, n);
+    wasm_blob_ptr += n;
+    *wasm_blob_ptr++ = 0x00;    //type(0)
+    *wasm_blob_ptr++ = typeidx; //typeidx
+    return wasm_blob_ptr;
+}
+
+#endif
+
 static void tcg_out_ld_helper_ret(TCGContext *s, const TCGLabelQemuLdst *ldst,
                                   bool load_sign,
                                   const TCGLdstHelperParam *parm)
@@ -6104,6 +6363,20 @@ int tcg_gen_code(TCGContext *s, TranslationBlock *tb, uint64_t pc_start)
     s->code_buf = tcg_splitwx_to_rw(tb->tc.ptr);
     s->code_ptr = s->code_buf;
 
+#if defined(EMSCRIPTEN) && !defined(CONFIG_TCG_INTERPRETER)
+    tcg_out_init();
+    num_helper_funcs = 0;
+    wasm_block_idx = 0;
+    block_ptr_placeholder_idx_pos = 0;
+    target_helper_types_pos = 0;
+    memset(label_to_block, -1, LABEL_MAX);
+    memset(target_helper_funcs, -1, WASM_NUM_HELPER_FUNCS_MAX);
+
+    s->code_ptr += 4; // placeholder for export vector offset
+    uint8_t *code_begin = s->code_ptr;
+    s->code_ptr += 4; // placeholder for size
+#endif
+
 #ifdef TCG_TARGET_NEED_LDST_LABELS
     QSIMPLEQ_INIT(&s->ldst_labels);
 #endif
@@ -6205,11 +6478,83 @@ int tcg_gen_code(TCGContext *s, TranslationBlock *tb, uint64_t pc_start)
         return -2;
     }
 
-#ifndef CONFIG_TCG_INTERPRETER
+#if !defined(CONFIG_TCG_INTERPRETER) && !defined(EMSCRIPTEN)
     /* flush instruction cache */
     flush_idcache_range((uintptr_t)tcg_splitwx_to_rx(s->code_buf),
                         (uintptr_t)s->code_buf,
                         tcg_ptr_byte_diff(s->code_ptr, s->code_buf));
+#endif
+
+#if defined(EMSCRIPTEN) && !defined(CONFIG_TCG_INTERPRETER)
+    tcg_out8(s, 0x0b); //end if
+    tcg_out8(s, 0x0b); //end loop
+    tcg_out8(s, 0x0); // unreachable
+    tcg_out8(s, 0x0b); //end func
+
+    // fill blocks
+    for (int i = 0; i < block_ptr_placeholder_idx_pos; i++) {
+        int label = block_ptr_placeholder[i].label;
+        int ph = block_ptr_placeholder[i].ptr;
+        int blk = label_to_block[label];
+        tcg_debug_assert(blk >= 0);
+        fill_uint32_leb128(ph, blk);
+    }
+
+    int code_size = (uint32_t)((uintptr_t)s->code_ptr - (uintptr_t)code_begin - 4);
+    *(uint32_t *)code_begin = code_size;
+
+    // write header
+    uint8_t *wasm_blob_ptr = s->code_ptr;
+    uint8_t *wasm_blob_ptr_base = s->code_ptr;
+    wasm_blob_ptr += 4; // placeholder for size
+
+    uint8_t *header_a_base = wasm_blob_ptr;
+    memcpy(wasm_blob_ptr, mod_header_a, sizeof(mod_header_a));
+    wasm_blob_ptr += sizeof(mod_header_a);
+    memcpy(wasm_blob_ptr, target_helper_types, target_helper_types_pos);
+    wasm_blob_ptr += target_helper_types_pos;
+    write_wasm_type_section_size(s, header_a_base, target_helper_types_pos);
+    uint8_t *header_b_base = wasm_blob_ptr;
+    memcpy(wasm_blob_ptr, mod_header_b, sizeof(mod_header_b));
+    wasm_blob_ptr += sizeof(mod_header_b);
+    uint8_t *header_b_adding_base = wasm_blob_ptr;
+    for (int i = 0; i < num_helper_funcs; i++) {
+        wasm_blob_ptr = tcg_out_import_entry(s, wasm_blob_ptr, i, i+1/*type0=start,1=helpers...*/);
+    }
+    write_wasm_import_section_size(s, header_b_base, (uint32_t)wasm_blob_ptr - (uint32_t)header_b_adding_base, num_helper_funcs);
+    write_wasm_memory_size(s, header_b_base);
+    uint8_t *header_c_base = wasm_blob_ptr;
+    memcpy(wasm_blob_ptr, mod_header_c, sizeof(mod_header_c));
+    wasm_blob_ptr += sizeof(mod_header_c);
+    write_wasm_export_section_size(s, header_c_base, num_helper_funcs);
+    uint8_t *header_d_ptr = wasm_blob_ptr;
+    memcpy(wasm_blob_ptr, mod_header_d, sizeof(mod_header_d));
+    wasm_blob_ptr += sizeof(mod_header_d);
+    write_wasm_code_size(s, header_d_ptr, code_size, 1);
+    
+    // write header size
+    *(uint32_t *)wasm_blob_ptr_base = wasm_blob_ptr - wasm_blob_ptr_base - 4;
+    s->code_ptr = wasm_blob_ptr;
+
+    // record importing helper functions
+    uint32_t *size_base = (uint32_t*)s->code_ptr;
+    s->code_ptr += 4;
+    memcpy(s->code_ptr, target_helper_funcs, num_helper_funcs * 4);
+    s->code_ptr += num_helper_funcs * 4;
+    *size_base = num_helper_funcs * 4;
+    
+    // init exporting functions with zeros
+    size_base = (uint32_t*)s->code_ptr;
+    s->code_ptr += 4;
+    *(uint32_t*)(s->code_buf) = (uint32_t)(s->code_ptr - s->code_buf);
+    int export_size = get_core_nums() * 4;
+    memset(s->code_ptr, 0, export_size);
+    s->code_ptr += export_size;
+    *size_base = export_size;
+
+    if (unlikely((void *)s->code_ptr > s->code_gen_highwater)) {
+        return -1;
+    }
 #endif
 
     return tcg_current_code_size(s);

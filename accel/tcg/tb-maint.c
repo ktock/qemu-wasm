@@ -853,7 +853,11 @@ static inline void tb_remove_from_jmp_list(TranslationBlock *orig, int n_orig)
 void tb_reset_jump(TranslationBlock *tb, int n)
 {
     uintptr_t addr = (uintptr_t)(tb->tc.ptr + tb->jmp_reset_offset[n]);
+#if defined(EMSCRIPTEN) && !defined(CONFIG_TCG_INTERPRETER)
+    tb_set_jmp_target(tb, n, 0);
+#else
     tb_set_jmp_target(tb, n, addr);
+#endif
 }
 
 /* remove any jumps to the TB */
