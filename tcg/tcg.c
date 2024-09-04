@@ -428,6 +428,35 @@ tlb_mask_table_ofs(TCGContext *s, int which)
 
 #if defined(EMSCRIPTEN) && !defined(CONFIG_TCG_INTERPRETER)
 
+#define SUB_BUF_MAX 100000
+__thread uint8_t sub_buf[SUB_BUF_MAX];
+__thread uint8_t *sub_buf_ptr;
+
+static inline void tcg_sub_out8(TCGContext *s, uint8_t v)
+{
+    *sub_buf_ptr++ = v;
+    if ((sub_buf_ptr - sub_buf) > SUB_BUF_MAX) {
+        printf("buffer too small"); fflush(stdout);
+        exit(1);
+    }
+}
+
+static inline void tcg_sub_out32(TCGContext *s, uint32_t v)
+{
+    memcpy(sub_buf_ptr, &v, sizeof(v));
+    sub_buf_ptr += 4;
+}
+
+static inline void* cur_sub_buf_ptr()
+{
+    return sub_buf_ptr;
+}
+
+static inline int cur_sub_buf_off_rel()
+{
+    return (int)sub_buf_ptr - (int)sub_buf;
+}
+
 #define LABEL_MAX 200
 
 struct label_placeholder {
@@ -524,12 +553,12 @@ static void wasm_add_label_context(TCGContext *s, int label, int block)
     label_to_block[label] = block;
 }
 
-static void wasm_add_label_block_ptr_placeholder(TCGContext *s, int label)
+static void wasm_add_label_block_ptr_placeholder(int label, uintptr_t code_ptr)
 {
     int i = block_ptr_placeholder_idx_pos++;
     tcg_debug_assert(i <= LABEL_MAX);
     block_ptr_placeholder[i].label = label;
-    block_ptr_placeholder[i].ptr = (uintptr_t)s->code_ptr;;
+    block_ptr_placeholder[i].ptr = code_ptr;
 }
 
 #endif
@@ -863,7 +892,7 @@ static const TCGTargetOpDef constraint_sets[] = {
 
 #include "tcg-target.c.inc"
 
-#ifndef CONFIG_TCG_INTERPRETER
+#if !defined(CONFIG_TCG_INTERPRETER) && !defined(EMSCRIPTEN)
 /* Validate CPUTLBDescFast placement. */
 QEMU_BUILD_BUG_ON((int)(offsetof(CPUNegativeOffsetState, tlb.f[0]) -
                         sizeof(CPUNegativeOffsetState))
@@ -1056,7 +1085,7 @@ static TCGHelperInfo info_helper_st128_mmu = {
               | dh_typemask(ptr, 5)  /* uintptr_t ra */
 };
 
-#if defined(CONFIG_TCG_INTERPRETER)
+#if defined(EMSCRIPTEN) || defined(CONFIG_TCG_INTERPRETER)
 static ffi_type *typecode_to_ffi(int argmask)
 {
     /*
@@ -6033,11 +6062,11 @@ static const uint8_t mod_header_d[] = {
     0x41, 0x00,              // i32.const 0
     0x36, 0x00, DO_INIT_OFF, // i32.store do_init
     0x42, 0x00,              // i64.const 0
-    0x24, 24,                // global.set $block_ptr
+    0x24, 16,                // global.set $block_ptr
     0x0b,                    // end
 
     0x03, 0x40,              // loop
-    0x23, 24,                // global.get $block_ptr
+    0x23, 16,                // global.get $block_ptr
     0x50,                    // i64.eqz
     0x04, 0x40,              // if
 };
@@ -6364,6 +6393,7 @@ int tcg_gen_code(TCGContext *s, TranslationBlock *tb, uint64_t pc_start)
     s->code_ptr = s->code_buf;
 
 #if defined(EMSCRIPTEN) && !defined(CONFIG_TCG_INTERPRETER)
+    sub_buf_ptr = sub_buf;
     tcg_out_init();
     num_helper_funcs = 0;
     wasm_block_idx = 0;
@@ -6372,9 +6402,19 @@ int tcg_gen_code(TCGContext *s, TranslationBlock *tb, uint64_t pc_start)
     memset(label_to_block, -1, LABEL_MAX);
     memset(target_helper_funcs, -1, WASM_NUM_HELPER_FUNCS_MAX);
 
-    s->code_ptr += 4; // placeholder for export vector offset
+    uint32_t *tci_code_off = (uint32_t*)s->code_ptr;
+    s->code_ptr += 4;
+    uint32_t *size_base = (uint32_t*)s->code_ptr;
+    s->code_ptr += 4;
+    uint32_t *export_vec_base = (uint32_t*)s->code_ptr;
+    int export_size = get_core_nums() * 4;
+    memset(s->code_ptr, 0, export_size);
+    s->code_ptr += export_size;
+    *size_base = export_size;
+
     uint8_t *code_begin = s->code_ptr;
     s->code_ptr += 4; // placeholder for size
+    *tci_code_off = s->code_ptr - s->code_buf;
 #endif
 
 #ifdef TCG_TARGET_NEED_LDST_LABELS
@@ -6486,10 +6526,10 @@ int tcg_gen_code(TCGContext *s, TranslationBlock *tb, uint64_t pc_start)
 #endif
 
 #if defined(EMSCRIPTEN) && !defined(CONFIG_TCG_INTERPRETER)
-    tcg_out8(s, 0x0b); //end if
-    tcg_out8(s, 0x0b); //end loop
-    tcg_out8(s, 0x0); // unreachable
-    tcg_out8(s, 0x0b); //end func
+    tcg_sub_out8(s, 0x0b); //end if
+    tcg_sub_out8(s, 0x0b); //end loop
+    tcg_sub_out8(s, 0x0); // unreachable
+    tcg_sub_out8(s, 0x0b); //end func
 
     // fill blocks
     for (int i = 0; i < block_ptr_placeholder_idx_pos; i++) {
@@ -6497,11 +6537,15 @@ int tcg_gen_code(TCGContext *s, TranslationBlock *tb, uint64_t pc_start)
         int ph = block_ptr_placeholder[i].ptr;
         int blk = label_to_block[label];
         tcg_debug_assert(blk >= 0);
+        *(uint8_t*)ph = 0x80;
         fill_uint32_leb128(ph, blk);
     }
 
     int code_size = (uint32_t)((uintptr_t)s->code_ptr - (uintptr_t)code_begin - 4);
     *(uint32_t *)code_begin = code_size;
+
+    int sub_buf_len = sub_buf_ptr - sub_buf;
+    int wasm_body_size = sub_buf_len;
 
     // write header
     uint8_t *wasm_blob_ptr = s->code_ptr;
@@ -6530,28 +6574,27 @@ int tcg_gen_code(TCGContext *s, TranslationBlock *tb, uint64_t pc_start)
     uint8_t *header_d_ptr = wasm_blob_ptr;
     memcpy(wasm_blob_ptr, mod_header_d, sizeof(mod_header_d));
     wasm_blob_ptr += sizeof(mod_header_d);
-    write_wasm_code_size(s, header_d_ptr, code_size, 1);
-    
-    // write header size
-    *(uint32_t *)wasm_blob_ptr_base = wasm_blob_ptr - wasm_blob_ptr_base - 4;
+    write_wasm_code_size(s, header_d_ptr, wasm_body_size, 1);
     s->code_ptr = wasm_blob_ptr;
 
+    // write body
+    memcpy(s->code_ptr, sub_buf, sub_buf_len);
+    s->code_ptr += sub_buf_len;
+
+    // write blob size
+    if (sub_buf_len > SUB_BUF_MAX) {
+        printf("sub too large sub_buf_len: %d\n", sub_buf_len); fflush(stdout);
+        exit(1);
+    }
+    *(uint32_t *)wasm_blob_ptr_base = s->code_ptr - wasm_blob_ptr_base - 4;
+
     // record importing helper functions
-    uint32_t *size_base = (uint32_t*)s->code_ptr;
+    size_base = (uint32_t*)s->code_ptr;
     s->code_ptr += 4;
     memcpy(s->code_ptr, target_helper_funcs, num_helper_funcs * 4);
     s->code_ptr += num_helper_funcs * 4;
     *size_base = num_helper_funcs * 4;
     
-    // init exporting functions with zeros
-    size_base = (uint32_t*)s->code_ptr;
-    s->code_ptr += 4;
-    *(uint32_t*)(s->code_buf) = (uint32_t)(s->code_ptr - s->code_buf);
-    int export_size = get_core_nums() * 4;
-    memset(s->code_ptr, 0, export_size);
-    s->code_ptr += export_size;
-    *size_base = export_size;
-
     if (unlikely((void *)s->code_ptr > s->code_gen_highwater)) {
         return -1;
     }

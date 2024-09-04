@@ -22,13 +22,14 @@ if get_option('tcg_interpreter')
                       method: 'pkg-config')
   tcg_ss.add(libffi)
   tcg_ss.add(files('tci.c'))
+elif cpu == 'wasm32'
+  libffi = dependency('libffi', version: '>=3.0', required: true,
+                      method: 'pkg-config')
+  specific_ss.add(libffi)
+  specific_ss.add(files('wasm32.c'))
 endif
 
 tcg_ss = tcg_ss.apply(config_targetos, strict: false)
-
-if cpu == 'wasm32'
-  specific_ss.add(files('wasm32.c'))
-endif
 
 libtcg_user = static_library('tcg_user',
                              tcg_ss.sources() + genh,

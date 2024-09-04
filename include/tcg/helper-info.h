@@ -9,7 +9,7 @@
 #ifndef TCG_HELPER_INFO_H
 #define TCG_HELPER_INFO_H
 
-#ifdef CONFIG_TCG_INTERPRETER
+#if defined(CONFIG_TCG_INTERPRETER) || defined(EMSCRIPTEN)
 #include <ffi.h>
 #endif
 
@@ -45,10 +45,13 @@ struct TCGHelperInfo {
     const char *name;
 
     /* Used with g_once_init_enter. */
-#ifdef CONFIG_TCG_INTERPRETER
+#if defined(CONFIG_TCG_INTERPRETER) && !defined(EMSCRIPTEN)
     ffi_cif *cif;
 #else
     uintptr_t init;
+#endif
+#if defined(EMSCRIPTEN)
+    ffi_cif *cif;
 #endif
 
     unsigned typemask           : 32;

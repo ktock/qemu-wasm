@@ -173,7 +173,7 @@ static void tlb_mmu_resize_locked(CPUTLBDesc *desc, CPUTLBDescFast *fast,
     rate = desc->window_max_entries * 100 / old_size;
 
     if (rate > 70) {
-        new_size = MIN(old_size << 1, 1 << CPU_TLB_DYN_MAX_BITS);
+        new_size = MIN(old_size << 1, (uint64_t)1 << CPU_TLB_DYN_MAX_BITS);
     } else if (rate < 30 && window_expired) {
         size_t ceil = pow2ceil(desc->window_max_entries);
         size_t expected_rate = desc->window_max_entries * 100 / ceil;

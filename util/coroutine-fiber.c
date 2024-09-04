@@ -86,7 +86,9 @@ CoroutineAction qemu_coroutine_switch(Coroutine *from_, Coroutine *to_,
     CoroutineEmscripten *from = DO_UPCAST(CoroutineEmscripten, base, from_);
     CoroutineEmscripten *to = DO_UPCAST(CoroutineEmscripten, base, to_);
 
+#if defined(EMSCRIPTEN) && !defined(CONFIG_TCG_INTERPRETER)
     set_unwinding_flag();
+#endif
     
     set_current(to_);
     to->action = action;

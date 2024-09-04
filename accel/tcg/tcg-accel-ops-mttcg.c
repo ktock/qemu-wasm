@@ -61,12 +61,18 @@ static void mttcg_force_rcu(Notifier *notify, void *data)
  * variable current_cpu can be used deep in the code to find the
  * current CPUState for a given thread.
  */
-
+#if defined(EMSCRIPTEN) && !defined(CONFIG_TCG_INTERPRETER)
+#include "../../tcg/wasm32.h"
+#endif
 static void *mttcg_cpu_thread_fn(void *arg)
 {
     MttcgForceRcuNotifier force_rcu;
     CPUState *cpu = arg;
 
+#if defined(EMSCRIPTEN) && !defined(CONFIG_TCG_INTERPRETER)
+    init_wasm32();
+#endif
+    
     assert(tcg_enabled());
     g_assert(!icount_enabled());
 
