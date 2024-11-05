@@ -1,0 +1,37 @@
+<html>
+  <head>
+    <title>QEMU on browser (emulated Raspberry Pi board)</title>
+    <link rel="stylesheet" href="./vendor/xterm.css" />
+  </head>
+  <body>
+    <div id="terminal"></div>
+    <script src="./load.js"></script>
+    <script type="module">
+      import 'https://unpkg.com/xterm@5.3.0/lib/xterm.js';
+      import 'https://unpkg.com/xterm-pty/index.js';
+      import './module.js'
+      import initEmscriptenModule from './out.js';
+
+      const xterm = new Terminal();
+      xterm.open(document.getElementById("terminal"));
+
+      const { master, slave } = openpty();
+
+      xterm.loadAddon(master);
+
+      Module.pty = slave;
+      (async () => {
+          const instance = await initEmscriptenModule(Module);
+          
+          var oldPoll = Module['TTY'].stream_ops.poll;
+          var pty = Module['pty'];
+          Module['TTY'].stream_ops.poll = function(stream, timeout){
+              if (!pty.readable) {
+                  return (pty.readable ? 1 : 0) | (pty.writable ? 4 : 0);
+              }
+              return oldPoll.call(stream, timeout);
+          }
+      })();
+    </script>
+  </body>
+</html>
