@@ -6,6 +6,8 @@ x86_64 and AArch64 guests are enabled as of now, but more will be enabled in the
 
 This is an experimental software.
 
+Demo page of QEMU on browser: https://ktock.github.io/qemu-wasm-demo/
+
 ## Building
 
 QEMU depends on several libraries including glib.
