@@ -436,7 +436,7 @@ static inline void tcg_sub_out8(TCGContext *s, uint8_t v)
 {
     *sub_buf_ptr++ = v;
     if ((sub_buf_ptr - sub_buf) > SUB_BUF_MAX) {
-        printf("buffer too small"); fflush(stdout);
+        printf("buffer too small\n"); fflush(stdout);
         exit(1);
     }
 }
@@ -6552,12 +6552,19 @@ int tcg_gen_code(TCGContext *s, TranslationBlock *tb, uint64_t pc_start)
     uint8_t *wasm_blob_ptr_base = s->code_ptr;
     wasm_blob_ptr += 4; // placeholder for size
 
+    if (unlikely(((void *)wasm_blob_ptr + sizeof(mod_header_a) + target_helper_types_pos) > s->code_gen_highwater)) {
+        return -1;
+    }
     uint8_t *header_a_base = wasm_blob_ptr;
     memcpy(wasm_blob_ptr, mod_header_a, sizeof(mod_header_a));
     wasm_blob_ptr += sizeof(mod_header_a);
     memcpy(wasm_blob_ptr, target_helper_types, target_helper_types_pos);
     wasm_blob_ptr += target_helper_types_pos;
     write_wasm_type_section_size(s, header_a_base, target_helper_types_pos);
+    
+    if (unlikely(((void *)wasm_blob_ptr + sizeof(mod_header_b)) > s->code_gen_highwater)) {
+        return -1;
+    }
     uint8_t *header_b_base = wasm_blob_ptr;
     memcpy(wasm_blob_ptr, mod_header_b, sizeof(mod_header_b));
     wasm_blob_ptr += sizeof(mod_header_b);
@@ -6567,10 +6574,18 @@ int tcg_gen_code(TCGContext *s, TranslationBlock *tb, uint64_t pc_start)
     }
     write_wasm_import_section_size(s, header_b_base, (uint32_t)wasm_blob_ptr - (uint32_t)header_b_adding_base, num_helper_funcs);
     write_wasm_memory_size(s, header_b_base);
+
+    if (unlikely(((void *)wasm_blob_ptr + sizeof(mod_header_c)) > s->code_gen_highwater)) {
+        return -1;
+    }
     uint8_t *header_c_base = wasm_blob_ptr;
     memcpy(wasm_blob_ptr, mod_header_c, sizeof(mod_header_c));
     wasm_blob_ptr += sizeof(mod_header_c);
     write_wasm_export_section_size(s, header_c_base, num_helper_funcs);
+
+    if (unlikely(((void *)wasm_blob_ptr + sizeof(mod_header_d)) > s->code_gen_highwater)) {
+        return -1;
+    }
     uint8_t *header_d_ptr = wasm_blob_ptr;
     memcpy(wasm_blob_ptr, mod_header_d, sizeof(mod_header_d));
     wasm_blob_ptr += sizeof(mod_header_d);
@@ -6578,6 +6593,9 @@ int tcg_gen_code(TCGContext *s, TranslationBlock *tb, uint64_t pc_start)
     s->code_ptr = wasm_blob_ptr;
 
     // write body
+    if (unlikely(((void *)s->code_ptr + sub_buf_len) > s->code_gen_highwater)) {
+        return -1;
+    }
     memcpy(s->code_ptr, sub_buf, sub_buf_len);
     s->code_ptr += sub_buf_len;
 
@@ -6589,6 +6607,9 @@ int tcg_gen_code(TCGContext *s, TranslationBlock *tb, uint64_t pc_start)
     *(uint32_t *)wasm_blob_ptr_base = s->code_ptr - wasm_blob_ptr_base - 4;
 
     // record importing helper functions
+    if (unlikely(((void *)s->code_ptr + 4 + num_helper_funcs * 4) > s->code_gen_highwater)) {
+        return -1;
+    }
     size_base = (uint32_t*)s->code_ptr;
     s->code_ptr += 4;
     memcpy(s->code_ptr, target_helper_funcs, num_helper_funcs * 4);
