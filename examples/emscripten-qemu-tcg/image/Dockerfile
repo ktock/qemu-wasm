@@ -1,11 +1,13 @@
-ARG BUSYBOX_VERSION=1_36_1
+ARG BUSYBOX_VERSION=1.36.1
 
 FROM ubuntu:22.04 AS rootfs-dev
 ARG BUSYBOX_VERSION
-RUN apt-get update && apt-get install -y gcc-x86-64-linux-gnu linux-libc-dev-amd64-cross git make gcc bzip2
+RUN apt-get update && apt-get install -y gcc-x86-64-linux-gnu linux-libc-dev-amd64-cross git make gcc bzip2 wget
 WORKDIR /work
-RUN git clone -b $BUSYBOX_VERSION --depth 1 https://git.busybox.net/busybox
-WORKDIR /work/busybox
+RUN wget https://busybox.net/downloads/busybox-${BUSYBOX_VERSION}.tar.bz2
+RUN bzip2 -d busybox-${BUSYBOX_VERSION}.tar.bz2
+RUN tar xvf busybox-${BUSYBOX_VERSION}.tar
+WORKDIR /work/busybox-${BUSYBOX_VERSION}
 RUN make CROSS_COMPILE=x86_64-linux-gnu- LDFLAGS=--static defconfig
 RUN make CROSS_COMPILE=x86_64-linux-gnu- LDFLAGS=--static -j$(nproc)
 RUN mkdir -p /rootfs/bin && mv busybox /rootfs/bin/busybox
