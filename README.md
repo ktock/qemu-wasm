@@ -136,3 +136,15 @@ This project adds a TCG backend that translates IR to Wasm. Wasm VM doesn't allo
 Each TB is translated to a Wasm module. One IR instruction is translated to the corresponding Wasm instruction(s). TB modules can access QEMU module's memory and helper functions by importing them.
 
 Ideally, all TBs should be translated to Wasm modules, but compilation overhead slows down the execution, and browsers don't look like capable of creating thousands of modules. So QEMU Wasm enables both TCI (IR interpreter) and TCG. Only TBs that run many times (e.g. 1000) are compiled to Wasm.
+
+## Similar projects
+
+- v86: https://github.com/copy/v86
+  - x86-compatible on-browser CPU emulator
+  - Supports JIT compilation using browser APIs
+  - 64bit guest is not supported as of Nov. 2024
+
+- Qemu.js: https://github.com/atrosinenko/qemujs
+  - QEMU ported to browser
+  - Supports JIT compilation (TCG) using browser APIs
+  - Single-threaded, no support for 64bit guests as of Nov. 2024
