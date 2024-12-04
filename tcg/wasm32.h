@@ -35,8 +35,6 @@ void set_unwinding_flag();
 
 int get_core_nums();
 
-void remove_tb(void *tb_ptr);
-
 void init_wasm32();
 
 #define INSTANTIATE_NUM 1500

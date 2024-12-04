@@ -886,10 +886,6 @@ static void tb_jmp_cache_inval_tb(TranslationBlock *tb)
 {
     CPUState *cpu;
 
-#if defined(EMSCRIPTEN) && !defined(CONFIG_TCG_INTERPRETER)
-    remove_tb(tb->tc.ptr);
-#endif
-    
     if (tb_cflags(tb) & CF_PCREL) {
         /* A TB may be at any virtual address */
         CPU_FOREACH(cpu) {
