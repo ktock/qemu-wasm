@@ -27,6 +27,8 @@
 
 typedef struct {
     Coroutine base;
+    void *stack;
+    size_t stack_size;
 
     void *asyncify_stack;
     size_t asyncify_stack_size;
@@ -59,13 +61,13 @@ Coroutine *qemu_coroutine_new(void)
 
     co = g_malloc0(sizeof(*co));
 
-    size_t stack_size = COROUTINE_STACK_SIZE;
-    char *stack = qemu_alloc_stack(&stack_size);
+    co->stack_size = COROUTINE_STACK_SIZE;
+    co->stack = qemu_alloc_stack(&co->stack_size);
 
     co->asyncify_stack_size = COROUTINE_STACK_SIZE;
     co->asyncify_stack = g_malloc0(co->asyncify_stack_size);
     emscripten_fiber_init(&co->fiber, coroutine_trampoline, &co->base,
-                          stack, stack_size, co->asyncify_stack, co->asyncify_stack_size);
+                          co->stack, co->stack_size, co->asyncify_stack, co->asyncify_stack_size);
     
     return &co->base;
 }
@@ -74,6 +76,7 @@ void qemu_coroutine_delete(Coroutine *co_)
 {
     CoroutineEmscripten *co = DO_UPCAST(CoroutineEmscripten, base, co_);
 
+    qemu_free_stack(co->stack, co->stack_size);
     g_free(co->asyncify_stack);
     g_free(co);
 }
@@ -107,6 +110,8 @@ Coroutine *qemu_coroutine_self(void)
             leaderp->asyncify_stack = g_malloc0(leader_asyncify_stack_size);
             leaderp->asyncify_stack_size = leader_asyncify_stack_size;
             emscripten_fiber_init_from_current_context(&leaderp->fiber, leaderp->asyncify_stack, leaderp->asyncify_stack_size);
+            leaderp->stack = leaderp->fiber.stack_limit;
+            leaderp->stack_size = leaderp->fiber.stack_base - leaderp->fiber.stack_limit;
             set_leader(leaderp);
         }
         self = &leaderp->base;
