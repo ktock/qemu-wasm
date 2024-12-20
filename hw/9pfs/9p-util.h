@@ -62,7 +62,7 @@ static inline uint64_t host_dev_to_dotl_dev(dev_t dev)
 
 /* Translates errno from host -> Linux if needed */
 static inline int errno_to_dotl(int err) {
-#if defined(CONFIG_LINUX)
+#if defined(CONFIG_LINUX) || defined(EMSCRIPTEN)
     /* nothing to translate (Linux -> Linux) */
 #elif defined(CONFIG_DARWIN)
     /*

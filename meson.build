@@ -2020,15 +2020,16 @@ dbus_display = get_option('dbus_display') \
            error_message: gdbus_codegen_error.format('-display dbus')) \
   .allowed()
 
-have_virtfs = get_option('virtfs') \
-    .require(targetos == 'linux' or targetos == 'darwin',
-             error_message: 'virtio-9p (virtfs) requires Linux or macOS') \
-    .require(targetos == 'linux' or cc.has_function('pthread_fchdir_np'),
-             error_message: 'virtio-9p (virtfs) on macOS requires the presence of pthread_fchdir_np') \
-    .require(targetos == 'darwin' or libattr.found(),
-             error_message: 'virtio-9p (virtfs) on Linux requires libattr-devel') \
-    .disable_auto_if(not have_tools and not have_system) \
-    .allowed()
+#have_virtfs = get_option('virtfs') \
+#    .require(targetos == 'linux' or targetos == 'darwin',
+#             error_message: 'virtio-9p (virtfs) requires Linux or macOS') \
+#    .require(targetos == 'linux' or cc.has_function('pthread_fchdir_np'),
+#             error_message: 'virtio-9p (virtfs) on macOS requires the presence of pthread_fchdir_np') \
+#    .require(targetos == 'darwin' or libattr.found(),
+#             error_message: 'virtio-9p (virtfs) on Linux requires libattr-devel') \
+#    .disable_auto_if(not have_tools and not have_system) \
+#    .allowed()
+have_virtfs = get_option('virtfs').allowed()
 
 have_virtfs_proxy_helper = get_option('virtfs_proxy_helper') \
     .require(targetos != 'darwin', error_message: 'the virtfs proxy helper is incompatible with macOS') \
