@@ -136,6 +136,10 @@ QEMU_EXTERN_C int daemon(int, int);
 #if defined(CONFIG_IOVEC) || defined(EMSCRIPTEN)
 #include <sys/uio.h>
 #endif
+#if defined(EMSCRIPTEN)
+#include <sys/sysmacros.h>
+#include <sys/statfs.h>
+#endif
 
 #if defined(__linux__) && defined(__sparc__)
 /* The SPARC definition of QEMU_VMALLOC_ALIGN needs SHMLBA */

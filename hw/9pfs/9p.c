@@ -3973,6 +3973,9 @@ out_nofid:
  * Linux guests.
  */
 #define P9_XATTR_SIZE_MAX 65536
+#elif defined(EMSCRIPTEN)
+/* No support for xattr */
+#define P9_XATTR_SIZE_MAX 0
 #else
 #error Missing definition for P9_XATTR_SIZE_MAX for this host system
 #endif

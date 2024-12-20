@@ -8,6 +8,9 @@ fsdev_ss.add(when: ['CONFIG_FSDEV_9P'], if_true: files(
 ), if_false: files('qemu-fsdev-dummy.c'))
 system_ss.add_all(when: 'CONFIG_LINUX', if_true: fsdev_ss)
 system_ss.add_all(when: 'CONFIG_DARWIN', if_true: fsdev_ss)
+if cpu == 'wasm32'
+  system_ss.add_all(fsdev_ss)
+endif
 
 if have_virtfs_proxy_helper
   executable('virtfs-proxy-helper',
