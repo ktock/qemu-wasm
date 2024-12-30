@@ -44,9 +44,12 @@ EM_JS(int, instantiate_wasm, (), {
         const tb_ptr = memory_v.getInt32(Module.__wasm32_tb.tb_ptr_ptr, true);
         const export_vec_size = memory_v.getInt32(tb_ptr + 4, true);
         const export_vec_begin = tb_ptr + 4 + 4;
+
+        const counter_vec_size = memory_v.getInt32(export_vec_begin + export_vec_size, true);
+        const counter_vec_begin = export_vec_begin + export_vec_size + 4;
         
-        const tmp_body_size = memory_v.getInt32(export_vec_begin + export_vec_size, true);
-        const tmp_body_begin = export_vec_begin + export_vec_size + 4;
+        const tmp_body_size = memory_v.getInt32(counter_vec_begin + counter_vec_size, true);
+        const tmp_body_begin = counter_vec_begin + counter_vec_size + 4;
         const wasm_size = memory_v.getInt32(tmp_body_begin + tmp_body_size, true);
         const wasm_begin = tmp_body_begin + tmp_body_size + 4;
         const import_vec_size = memory_v.getInt32(wasm_begin + wasm_size, true);
@@ -64,39 +67,138 @@ EM_JS(int, instantiate_wasm, (), {
                         },
                     "helper": helper,
                         });
-        var ptr = export_vec_begin + 4 * Module.__wasm32_tb.cur_core_num;
+
+        Module.__wasm32_tb.inst_gc_registry.register(inst, "instance");
+
         const fidx = addFunction(inst.exports.start, 'ii');
-        memory_v.setUint32(ptr, fidx, true);
 
-        const remove_n = memory_v.getInt32(Module.__wasm32_tb.to_remove_instance_idx_ptr, true);
-        if (remove_n > 500) {
-            for (var i = 0; i < remove_n * 4; i += 4) {
-                removeFunction(memory_v.getInt32(Module.__wasm32_tb.to_remove_instance_ptr + i, true));
-            }
-            memory_v.setInt32(Module.__wasm32_tb.to_remove_instance_idx_ptr, 0, true);
-        }
-
-        return 0;
+        return fidx;
 });
 
 __thread bool initdone = false;
 __thread int cur_core_num = -1;
 __thread int export_vec_off = -1;
+__thread int counter_vec_off = -1;
 __thread int all_cores_num = -1;
 int cur_core_num_max = 0;
+
+EM_JS(void, remove_module_js, (), {
+        const memory_v = new DataView(HEAP8.buffer);
+        const remove_n = memory_v.getInt32(Module.__wasm32_tb.to_remove_instance_idx_ptr, true);
+        for (var i = 0; i < remove_n * 4; i += 4) {
+            removeFunction(memory_v.getInt32(Module.__wasm32_tb.to_remove_instance_ptr + i, true));
+        }
+        memory_v.setInt32(Module.__wasm32_tb.to_remove_instance_idx_ptr, 0, true);
+    });
+
+int instance_alive_global = 0;
+__thread int instance_alive_local = 0;
+__thread int instance_running_local = 0;
+__thread uint32_t instance_garbage_collected_local = 0;
+
+struct instance_info {
+    uint8_t *tb;
+    int fidx;
+};
+
+#define MAX_INSTANCE_ALIVE 15000
+#define INSTANCE_RUNNING_LEN MAX_INSTANCE_ALIVE
+__thread struct instance_info instance_running[INSTANCE_RUNNING_LEN];
+__thread int instance_running_begin = 0;
+__thread int instance_running_end = 0;
 
 #define TO_REMOVE_INSTANCE_SIZE 50000
 __thread static int to_remove_instance[TO_REMOVE_INSTANCE_SIZE];
 __thread static int to_remove_instance_idx = 0;
 
-void remove_tb(void *tb_ptr) {
-    int32_t *slot = (int32_t*)((uint8_t*)tb_ptr + export_vec_off);
-    int32_t f = *slot;
-    if (f <= 0) {
+static bool can_add_instance()
+{
+    return qatomic_read(&instance_alive_global) < MAX_INSTANCE_ALIVE;
+}
+
+static void inc_instance_local()
+{
+    instance_running_local++;
+    instance_alive_local++;
+}
+
+static int instance_pending_gc_local()
+{
+    return (instance_alive_local - instance_running_local);
+}
+
+static void check_instance_garbage_collected()
+{
+    if (instance_garbage_collected_local > 0) {
+        if (instance_garbage_collected_local > instance_pending_gc_local()) {
+            printf("unexpected number of removed instances %d > %d",
+                   instance_garbage_collected_local, instance_pending_gc_local()); fflush(stdout);
+            exit(1);
+        }
+        qatomic_sub(&instance_alive_global, instance_garbage_collected_local);
+        instance_alive_local -= instance_garbage_collected_local;
+        instance_garbage_collected_local = 0;
+    }
+}
+
+static void remove_instance_running_local()
+{
+    if (instance_pending_gc_local() > 0) {
         return;
     }
-    *slot = 0;
-    to_remove_instance[to_remove_instance_idx++] = f;
+    int to_remove = instance_running_local / 2;
+    for (int i = 0; i < to_remove; i++) {
+        instance_running[instance_running_begin].tb = NULL;
+        to_remove_instance[to_remove_instance_idx++] = instance_running[instance_running_begin].fidx;
+        instance_running_local--;
+        instance_running_begin = (instance_running_begin + 1)%INSTANCE_RUNNING_LEN;
+    }
+    if (to_remove_instance_idx > 0) {
+        remove_module_js();
+    }
+}
+
+static void add_instance_running_local(int fidx, void *tb_ptr)
+{
+    instance_running[instance_running_end].tb = tb_ptr;
+    instance_running[instance_running_end].fidx = fidx;
+
+    int tb_export_ptr = (uint32_t)tb_ptr + export_vec_off;
+    *(uint32_t*)tb_export_ptr = (uint32_t)(&(instance_running[instance_running_end]));
+
+    instance_running_end  = (instance_running_end+1)%INSTANCE_RUNNING_LEN;
+    inc_instance_local();
+    qatomic_inc(&instance_alive_global);
+
+}
+
+static int get_instance_running_local(void *tb_ptr)
+{
+    int tb_export_ptr = (uint32_t)tb_ptr + export_vec_off;
+    struct instance_info *elm = (struct instance_info *)tb_export_ptr;
+    if (elm == NULL) {
+        return 0;
+    }
+    if (elm->tb != tb_ptr) {
+        *(uint32_t*)tb_export_ptr = 0;
+        int tb_counter_ptr = (uint32_t)tb_ptr + counter_vec_off;
+        *(uint32_t*)tb_counter_ptr = INSTANTIATE_NUM; // will be instanciated immediately
+        return 0;
+    }
+    return elm->fidx;
+}
+
+#define MAX_EXEC_NUM 50000
+__thread int exec_cnt = MAX_EXEC_NUM;
+static inline void trysleep()
+{
+    if (--exec_cnt == 0) {
+        if (!can_add_instance()) {
+            emscripten_sleep(0); // return to the browser main loop
+            check_instance_garbage_collected();
+        }
+        exec_cnt = MAX_EXEC_NUM;
+    }
 }
 
 __thread struct wasmContext ctx = {
@@ -125,12 +227,20 @@ int get_core_nums()
     return emscripten_num_logical_cores();
 }
 
-EM_JS(void, init_wasm32_js, (int tb_ptr_ptr, int cur_core_num, int to_remove_instance_ptr, int to_remove_instance_idx_ptr), {
+EM_JS(void, init_wasm32_js, (int tb_ptr_ptr, int cur_core_num, int to_remove_instance_ptr, int to_remove_instance_idx_ptr, int instance_garbage_collected_ptr), {
         Module.__wasm32_tb = {
             tb_ptr_ptr: tb_ptr_ptr,
             cur_core_num: cur_core_num,
             to_remove_instance_ptr: to_remove_instance_ptr,
             to_remove_instance_idx_ptr: to_remove_instance_idx_ptr,
+            instance_garbage_collected_ptr: instance_garbage_collected_ptr,
+            inst_gc_registry: new FinalizationRegistry((i) => {
+                    if (i == "instance") {
+                        const memory_v = new DataView(HEAP8.buffer);
+                        let v = memory_v.getInt32(Module.__wasm32_tb.instance_garbage_collected_ptr, true);
+                        memory_v.setInt32(Module.__wasm32_tb.instance_garbage_collected_ptr, v + 1, true);
+                    }
+            })
         };
 });
 
@@ -138,12 +248,13 @@ void init_wasm32()
 {
     if (!initdone) {
         cur_core_num = qatomic_fetch_inc(&cur_core_num_max);
-        export_vec_off = 4 + 4 + cur_core_num * 4;
         all_cores_num = get_core_nums();
+        export_vec_off = 4 + 4 + cur_core_num * 4;
+        counter_vec_off = 4 + 4 + all_cores_num * 4 + 4 + cur_core_num * 4;
         ctx.stack = (uint64_t*)malloc(TCG_STATIC_CALL_ARGS_SIZE + TCG_STATIC_FRAME_SIZE);
         ctx.stack128 = (uint64_t*)malloc(TCG_STATIC_CALL_ARGS_SIZE + TCG_STATIC_FRAME_SIZE);
         ctx.tci_tb_ptr = (uint32_t*)&tci_tb_ptr;
-        init_wasm32_js((int)&ctx.tb_ptr, cur_core_num, (int)to_remove_instance, (int)&to_remove_instance_idx);
+        init_wasm32_js((int)&ctx.tb_ptr, cur_core_num, (int)to_remove_instance, (int)&to_remove_instance_idx, (int)&instance_garbage_collected_local);
         initdone = true;
     }
 }
@@ -1110,9 +1221,9 @@ static inline uintptr_t tcg_qemu_tb_exec_tci(CPUArchState *env)
             if (*(uint32_t **)ptr != 0) {
                 tb_ptr = *(uint32_t **)ptr;
                 ctx.tb_ptr = tb_ptr;
-                int tb_entry_ptr = (uint32_t)tb_ptr + export_vec_off;
-                if ((*(int32_t*)tb_entry_ptr <= 0) && (*(int32_t*)tb_entry_ptr > (-1 * INSTANTIATE_NUM))) {
-                    *(int32_t*)tb_entry_ptr -= 1;
+                int tb_counter_ptr = (uint32_t)tb_ptr + counter_vec_off;
+                if ((*(int32_t*)tb_counter_ptr >= 0) && (*(int32_t*)tb_counter_ptr < INSTANTIATE_NUM)) {
+                    *(int32_t*)tb_counter_ptr += 1;
                 } else {
                     // enter to wasm TB
                     return 0;
@@ -1131,9 +1242,9 @@ static inline uintptr_t tcg_qemu_tb_exec_tci(CPUArchState *env)
             tb_ptr = ptr;
 
             ctx.tb_ptr = tb_ptr;
-            int tb_entry_ptr = (uint32_t)tb_ptr + export_vec_off;
-            if ((*(int32_t*)tb_entry_ptr <= 0) && (*(int32_t*)tb_entry_ptr > (-1 * INSTANTIATE_NUM))) {
-                *(int32_t*)tb_entry_ptr -= 1;
+            int tb_counter_ptr = (uint32_t)tb_ptr + counter_vec_off;
+            if ((*(int32_t*)tb_counter_ptr >= 0) && (*(int32_t*)tb_counter_ptr < INSTANTIATE_NUM)) {
+                *(int32_t*)tb_counter_ptr += 1;
             } else {
                 // enter to wasm TB
                 return 0;
@@ -1210,16 +1321,23 @@ uintptr_t QEMU_DISABLE_CFI tcg_qemu_tb_exec(CPUArchState *env,
     ctx.tb_ptr = (uint32_t*)v_tb_ptr;
     ctx.do_init = 1;
     while (true) {
-        int tb_entry_ptr = (uint32_t)ctx.tb_ptr + export_vec_off;
+        trysleep();
+        int tb_counter_ptr = (uint32_t)ctx.tb_ptr + counter_vec_off;
         uint32_t res;
-        if (*(int32_t*)tb_entry_ptr > 0) {
-            res = ((wasm_func_ptr)(*(uint32_t*)tb_entry_ptr))(&ctx);
-        } else if (*(int32_t*)tb_entry_ptr > (-1 * INSTANTIATE_NUM)) {
-            *(int32_t*)tb_entry_ptr -= 1;
+        int fidx = get_instance_running_local(ctx.tb_ptr);
+        if (fidx > 0) {
+            res = ((wasm_func_ptr)(fidx))(&ctx);
+        } else if (*(int32_t*)tb_counter_ptr < INSTANTIATE_NUM) {
+            *(int32_t*)tb_counter_ptr += 1;
+            res = tcg_qemu_tb_exec_tci(env);
+        } else if (!can_add_instance()) {
+            remove_instance_running_local();
+            check_instance_garbage_collected();
             res = tcg_qemu_tb_exec_tci(env);
         } else {
-            instantiate_wasm();
-            res = ((wasm_func_ptr)(*(uint32_t*)tb_entry_ptr))(&ctx);
+            int fidx = instantiate_wasm();
+            add_instance_running_local(fidx, ctx.tb_ptr);
+            res = ((wasm_func_ptr)(fidx))(&ctx);
         }
         if ((uint32_t)ctx.tb_ptr == 0) {
             return res;

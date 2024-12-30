@@ -6412,6 +6412,13 @@ int tcg_gen_code(TCGContext *s, TranslationBlock *tb, uint64_t pc_start)
     s->code_ptr += export_size;
     *size_base = export_size;
 
+    size_base = (uint32_t*)s->code_ptr;
+    s->code_ptr += 4;
+    int counter_size = get_core_nums() * 4;
+    memset(s->code_ptr, 0, counter_size);
+    s->code_ptr += counter_size;
+    *size_base = counter_size;
+    
     uint8_t *code_begin = s->code_ptr;
     s->code_ptr += 4; // placeholder for size
     *tci_code_off = s->code_ptr - s->code_buf;
