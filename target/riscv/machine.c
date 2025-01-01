@@ -23,6 +23,7 @@
 #include "migration/cpu.h"
 #include "sysemu/cpu-timers.h"
 #include "debug.h"
+#include "time_helper.h"
 
 static bool pmp_needed(void *opaque)
 {
@@ -268,6 +269,7 @@ static int riscv_cpu_post_load(void *opaque, int version_id)
 
     env->xl = cpu_recompute_xl(env);
     riscv_cpu_update_mask(env);
+    riscv_timer_write_timecmp(env, env->stimer, env->stimecmp, 0, MIP_STIP);
     return 0;
 }
 
