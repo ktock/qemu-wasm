@@ -175,7 +175,7 @@ static void add_instance_running_local(int fidx, void *tb_ptr)
 static int get_instance_running_local(void *tb_ptr)
 {
     int tb_export_ptr = (uint32_t)tb_ptr + export_vec_off;
-    struct instance_info *elm = (struct instance_info *)tb_export_ptr;
+    struct instance_info *elm = (struct instance_info *)(*(uint32_t*)tb_export_ptr);
     if (elm == NULL) {
         return 0;
     }
