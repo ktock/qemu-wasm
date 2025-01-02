@@ -34,6 +34,12 @@ RUN make ARCH=x86 CROSS_COMPILE=x86_64-linux-gnu- -j$(nproc) all && \
     mv /work-buildlinux/linux/arch/x86/boot/bzImage /out/bzImage && \
     make clean
 
-FROM scratch
-COPY --from=rootfs-dev /out/rootfs.bin /
-COPY --from=kernel-dev /out/bzImage /
+FROM gcc:14
+RUN apt-get update && apt-get install -y libffi-dev libglib2.0-dev libpixman-1-dev libattr1 libattr1-dev ninja-build pipx
+RUN PIPX_BIN_DIR=/usr/local/bin pipx install meson==1.5.0
+
+COPY --from=rootfs-dev /out/rootfs.bin /pack/
+COPY --from=kernel-dev /out/bzImage /pack/
+
+WORKDIR /build/
+CMD sleep infinity

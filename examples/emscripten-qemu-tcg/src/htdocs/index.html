@@ -20,6 +20,7 @@
       xterm.loadAddon(master);
 
       Module.pty = slave;
+      Module['mainScriptUrlOrBlob'] = location.origin + "/out.js";
       (async () => {
           const instance = await initEmscriptenModule(Module);
           
