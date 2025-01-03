@@ -24,8 +24,8 @@ For building `qemu-system-x86_64` (x86_64 guest):
 ```console
 $ EXTRA_CFLAGS="-O3 -g -Wno-error=unused-command-line-argument -matomics -mbulk-memory -DNDEBUG -DG_DISABLE_ASSERT -D_GNU_SOURCE -sASYNCIFY=1 -pthread -sPROXY_TO_PTHREAD=1 -sFORCE_FILESYSTEM -sALLOW_TABLE_GROWTH -sTOTAL_MEMORY=2300MB -sWASM_BIGINT -sMALLOC=mimalloc --js-library=/build/node_modules/xterm-pty/emscripten-pty.js -sEXPORT_ES6=1 -sASYNCIFY_IMPORTS=ffi_call_js" ; \
   docker exec -it build-qemu-wasm emconfigure /qemu/configure --static --target-list=x86_64-softmmu --cpu=wasm32 --cross-prefix= \
-    --without-default-features --enable-system --with-coroutine=fiber \
-    --extra-cflags="$EXTRA_CFLAGS" --extra-cxxflags="$EXTRA_CFLAGS" --extra-ldflags="-sEXPORTED_RUNTIME_METHODS=getTempRet0,setTempRet0,addFunction,removeFunction,TTY" && \
+    --without-default-features --enable-system --with-coroutine=fiber --enable-virtfs \
+    --extra-cflags="$EXTRA_CFLAGS" --extra-cxxflags="$EXTRA_CFLAGS" --extra-ldflags="-sEXPORTED_RUNTIME_METHODS=getTempRet0,setTempRet0,addFunction,removeFunction,TTY,FS" && \
   docker exec -it build-qemu-wasm emmake make -j $(nproc) qemu-system-x86_64
 ```
 
@@ -34,14 +34,24 @@ For building `qemu-system-aarch64` (AArch64 guest):
 ```console
 $ EXTRA_CFLAGS="-O3 -g -Wno-error=unused-command-line-argument -matomics -mbulk-memory -DNDEBUG -DG_DISABLE_ASSERT -D_GNU_SOURCE -sASYNCIFY=1 -pthread -sPROXY_TO_PTHREAD=1 -sFORCE_FILESYSTEM -sALLOW_TABLE_GROWTH -sTOTAL_MEMORY=2300MB -sWASM_BIGINT -sMALLOC=mimalloc --js-library=/build/node_modules/xterm-pty/emscripten-pty.js -sEXPORT_ES6=1 -sASYNCIFY_IMPORTS=ffi_call_js" ; \
   docker exec -it build-qemu-wasm emconfigure /qemu/configure --static --target-list=aarch64-softmmu --cpu=wasm32 --cross-prefix= \
-    --without-default-features --enable-system --with-coroutine=fiber \
-    --extra-cflags="$EXTRA_CFLAGS" --extra-cxxflags="$EXTRA_CFLAGS" --extra-ldflags="-sEXPORTED_RUNTIME_METHODS=getTempRet0,setTempRet0,addFunction,removeFunction,TTY" && \
+    --without-default-features --enable-system --with-coroutine=fiber --enable-virtfs \
+    --extra-cflags="$EXTRA_CFLAGS" --extra-cxxflags="$EXTRA_CFLAGS" --extra-ldflags="-sEXPORTED_RUNTIME_METHODS=getTempRet0,setTempRet0,addFunction,removeFunction,TTY,FS" && \
   docker exec -it build-qemu-wasm emmake make -j $(nproc) qemu-system-aarch64
+```
+
+For building `qemu-system-riscv64` (RISCV64 guest):
+
+```console
+$ EXTRA_CFLAGS="-O3 -g -Wno-error=unused-command-line-argument -matomics -mbulk-memory -DNDEBUG -DG_DISABLE_ASSERT -D_GNU_SOURCE -sASYNCIFY=1 -pthread -sPROXY_TO_PTHREAD=1 -sFORCE_FILESYSTEM -sALLOW_TABLE_GROWTH -sTOTAL_MEMORY=2300MB -sWASM_BIGINT -sMALLOC=mimalloc --js-library=/build/node_modules/xterm-pty/emscripten-pty.js -sEXPORT_ES6=1 -sASYNCIFY_IMPORTS=ffi_call_js" ; \
+  docker exec -it build-qemu-wasm emconfigure /qemu/configure --static --target-list=riscv64-softmmu --cpu=wasm32 --cross-prefix= \
+    --without-default-features --enable-system --with-coroutine=fiber --enable-virtfs \
+    --extra-cflags="$EXTRA_CFLAGS" --extra-cxxflags="$EXTRA_CFLAGS" --extra-ldflags="-sEXPORTED_RUNTIME_METHODS=getTempRet0,setTempRet0,addFunction,removeFunction,TTY,FS" && \
+  docker exec -it build-qemu-wasm emmake make -j $(nproc) qemu-system-riscv64
 ```
 
 ## Examples
 
-### Running QEMU on browser
+### Running QEMU on browser (x86_64 guest)
 
 ![Running QEMU on browser](./images/qemu-x86_64.png)
 
@@ -120,6 +130,46 @@ $ docker run --rm -p 127.0.0.1:8088:80 \
 
 Then `localhost:8088` serves the page.
 
+### Running QEMU on browser (RISCV64 guest)
+
+![Running QEMU on browser](./images/qemu-riscv64.png)
+
+Build `qemu-system-riscv64` as shown in "Building" section and keep `build-qemu-wasm` running.
+
+The following steps are done outside of the container.
+
+Preparing for example images (busybox + linux):
+
+```console
+$ mkdir /tmp/pack/
+$ docker build --output=type=local,dest=/tmp/pack/ ./examples/riscv64/image
+```
+
+Packaging dependencies:
+
+```console
+$ cp ./pc-bios/opensbi-riscv64-generic-fw_dynamic.bin /tmp/pack/
+$ docker cp /tmp/pack build-qemu-wasm:/
+$ docker exec -it build-qemu-wasm /bin/sh -c "/emsdk/upstream/emscripten/tools/file_packager.py qemu-system-riscv64.data --preload /pack > load.js"
+```
+
+Serving them on localhost:
+
+```console
+$ mkdir -p /tmp/test-js/htdocs/
+$ cp -R ./examples/riscv64/src/* /tmp/test-js/
+$ docker cp build-qemu-wasm:/build/qemu-system-riscv64 /tmp/test-js/htdocs/out.js
+$ for f in qemu-system-riscv64.wasm qemu-system-riscv64.worker.js qemu-system-riscv64.data load.js ; do
+    docker cp build-qemu-wasm:/build/${f} /tmp/test-js/htdocs/
+  done
+$ docker run --rm -p 127.0.0.1:8088:80 \
+         -v "/tmp/test-js/htdocs:/usr/local/apache2/htdocs/:ro" \
+         -v "/tmp/test-js/xterm-pty.conf:/usr/local/apache2/conf/extra/xterm-pty.conf:ro" \
+         --entrypoint=/bin/sh httpd -c 'echo "Include conf/extra/xterm-pty.conf" >> /usr/local/apache2/conf/httpd.conf && httpd-foreground'
+```
+
+Then `localhost:8088` serves the page.
+
 ### Running containers on browser using container2wasm
 
 QEMU Wasm is used by container2wasm project.
@@ -136,6 +186,10 @@ This project adds a TCG backend that translates IR to Wasm. Wasm VM doesn't allo
 Each TB is translated to a Wasm module. One IR instruction is translated to the corresponding Wasm instruction(s). TB modules can access QEMU module's memory and helper functions by importing them.
 
 Ideally, all TBs should be translated to Wasm modules, but compilation overhead slows down the execution, and browsers don't look like capable of creating thousands of modules. So QEMU Wasm enables both TCI (IR interpreter) and TCG. Only TBs that run many times (e.g. 1000) are compiled to Wasm.
+
+## Additional Resources
+
+- [`./examples/`](./examples): Examples (networking, virtfs, migration, etc...)
 
 ## Similar projects
 
