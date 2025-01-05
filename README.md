@@ -2,7 +2,6 @@
 
 This is a patched QEMU to make it runnable inside the browser.
 JIT binary translation (TCG) with multi-thread support (Multi-Threaded TCG) is also enabled.
-x86_64 and AArch64 guests are enabled as of now, but more will be enabled in the future.
 
 This is an experimental software.
 
@@ -103,7 +102,7 @@ Preparing for example images (busbox + linux):
 
 ```console
 $ mkdir /tmp/pack/
-$ docker build --output=type=local,dest=/tmp/pack/ ./examples/raspi3ap-qemu/image/
+$ docker build --output=type=local,dest=/tmp/pack/ ./examples/raspi3ap/image/
 ```
 
 Packaging dependencies:
@@ -117,7 +116,7 @@ Serving them on localhost:
 
 ```console
 $ mkdir -p /tmp/test-js/htdocs/
-$ cp -R ./examples/raspi3ap-qemu/src/* /tmp/test-js/
+$ cp -R ./examples/raspi3ap/src/* /tmp/test-js/
 $ docker cp build-qemu-wasm:/build/qemu-system-aarch64 /tmp/test-js/htdocs/out.js
 $ for f in qemu-system-aarch64.wasm qemu-system-aarch64.worker.js qemu-system-aarch64.data load.js ; do
     docker cp build-qemu-wasm:/build/${f} /tmp/test-js/htdocs/
@@ -170,15 +169,6 @@ $ docker run --rm -p 127.0.0.1:8088:80 \
 
 Then `localhost:8088` serves the page.
 
-### Running containers on browser using container2wasm
-
-QEMU Wasm is used by container2wasm project.
-There are examples of running containers on browsers using QEMU on container2wasm repo:
-
-- Running x86_64 container: https://github.com/ktock/container2wasm/tree/main/examples/emscripten-qemu-tcg
-- Running AArch64 container: https://github.com/ktock/container2wasm/tree/main/examples/emscripten-aarch64
-- Running Raspberry Pi emulated on browser (using `c2w` command): https://github.com/ktock/container2wasm/tree/main/examples/raspi3ap-qemu
-
 ## How does it work?
 
 This project adds a TCG backend that translates IR to Wasm. Wasm VM doesn't allow transferring control to the generated Wasm code on memory, so this project relies on browser APIs (`WebAssembly.Module` and `WebAssembly.Instance`) to achieve that.
@@ -190,6 +180,7 @@ Ideally, all TBs should be translated to Wasm modules, but compilation overhead 
 ## Additional Resources
 
 - [`./examples/`](./examples): Examples (networking, virtfs, migration, etc...)
+- Using QEMU Wasm from container2wasm: https://github.com/ktock/container2wasm/tree/main/examples/emscripten-qemu
 
 ## Similar projects
 
