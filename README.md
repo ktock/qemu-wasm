@@ -62,7 +62,7 @@ Preparing for example images (busybox + linux):
 
 ```console
 $ mkdir /tmp/pack/
-$ docker build --output=type=local,dest=/tmp/pack/ ./examples/emscripten-qemu-tcg/image
+$ docker build --output=type=local,dest=/tmp/pack/ ./examples/x86_64/image
 ```
 
 Packaging dependencies:
@@ -77,7 +77,7 @@ Serving them on localhost:
 
 ```console
 $ mkdir -p /tmp/test-js/htdocs/
-$ cp -R ./examples/emscripten-qemu-tcg/src/* /tmp/test-js/
+$ cp -R ./examples/x86_64/src/* /tmp/test-js/
 $ docker cp build-qemu-wasm:/build/qemu-system-x86_64 /tmp/test-js/htdocs/out.js
 $ for f in qemu-system-x86_64.wasm qemu-system-x86_64.worker.js qemu-system-x86_64.data load.js ; do
     docker cp build-qemu-wasm:/build/${f} /tmp/test-js/htdocs/
