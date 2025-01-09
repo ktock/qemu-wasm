@@ -21,6 +21,8 @@ $ EXTRA_CFLAGS="-O3 -g -Wno-error=unused-command-line-argument -matomics -mbulk-
 Packaging dependencies:
 
 ```console
+$ mkdir /tmp/pack/
+$ docker build --output=type=local,dest=/tmp/pack/ ./examples/x86_64/image
 $ cp ./pc-bios/{bios-256k.bin,vgabios-stdvga.bin,kvmvapic.bin,linuxboot_dma.bin,efi-virtio.rom} /tmp/pack/
 $ docker cp /tmp/pack build-qemu-wasm:/
 $ docker exec -it build-qemu-wasm /bin/sh -c "/emsdk/upstream/emscripten/tools/file_packager.py qemu-system-x86_64.data --preload /pack > load.js"

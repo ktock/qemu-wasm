@@ -10,7 +10,7 @@ This document describes how to utilize this on QEMU Wasm, for migrating VM state
 To build this container, run the following at the repository root directory.
 
 ```
-$ docker build -f ./examples/emscripten-qemu-tcg/image/Dockerfile.qemu -t build-qemu-native ./examples/emscripten-qemu-tcg/image/
+$ docker build -f ./examples/x86_64/image/Dockerfile.qemu -t build-qemu-native ./examples/x86_64/image/
 $ docker run --rm -d --name build-qemu-native -v $(pwd):/qemu/:ro build-qemu-native
 $ docker exec -it build-qemu-native /qemu/configure --static --target-list=x86_64-softmmu --cross-prefix= \
     --without-default-features --enable-system --with-coroutine=ucontext --enable-virtfs --enable-attr
@@ -72,7 +72,7 @@ Finally, package dependencies and run the server.
 ```
 $ docker exec -it build-qemu-wasm /bin/sh -c "/emsdk/upstream/emscripten/tools/file_packager.py qemu-system-x86_64.data --preload /pack > load.js"
 $ mkdir -p /tmp/test-js/htdocs/
-$ cp -R ./examples/emscripten-qemu-tcg/src/* /tmp/test-js/
+$ cp -R ./examples/x86_64/src/* /tmp/test-js/
 $ cp ./examples/migration/module.js /tmp/test-js/htdocs/
 $ docker cp build-qemu-wasm:/build/qemu-system-x86_64 /tmp/test-js/htdocs/out.js
 $ for f in qemu-system-x86_64.wasm qemu-system-x86_64.worker.js qemu-system-x86_64.data load.js ; do
