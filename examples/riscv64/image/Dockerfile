@@ -14,6 +14,7 @@ RUN mkdir -p /rootfs/bin && mv busybox /rootfs/bin/busybox
 RUN make LDFLAGS=--static defconfig
 RUN make LDFLAGS=--static -j$(nproc)
 RUN for i in $(./busybox --list) ; do ln -s busybox /rootfs/bin/$i ; done
+RUN mkdir -p /rootfs/usr/share/udhcpc/ && cp ./examples/udhcp/simple.script /rootfs/usr/share/udhcpc/default.script
 RUN mkdir -p /rootfs/proc /rootfs/sys /rootfs/mnt /rootfs/run /rootfs/tmp /rootfs/dev /rootfs/var /rootfs/etc && mknod /rootfs/dev/null c 1 3 && chmod 666 /rootfs/dev/null
 COPY ./rcS /rootfs/etc/init.d/
 RUN chmod 700 /rootfs/etc/init.d/rcS
