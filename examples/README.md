@@ -6,3 +6,4 @@
 - [`x86_64`](./x86_64/): Running x86_64 guest inside browser (used by [`../README.md`](../README.md))
 - [`raspi3ap`](./raspi3ap/): Running emulated Raspberry Pi board inside browser (used by [`../README.md`](../README.md))
 - [`riscv64`](./riscv64/): Running RISCV64 guest inside browser (used by [`../README.md`](../README.md))
+- [`x86_64-alpine`](./x86_64-alpine/): Running Alpine Linux (x86_64) inside browser.
