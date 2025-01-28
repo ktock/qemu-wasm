@@ -1,0 +1,95 @@
+<html>
+  <head>
+    <title>QEMU on browser</title>
+    <link rel="stylesheet" href="./xterm.css" />
+  </head>
+  <body>
+    <div id="terminal"></div>
+    <script src="./load-rootfs.js"></script>
+    <script src="./load-kernel.js"></script>
+    <script src="./load-initramfs.js"></script>
+    <script src="./load-rom.js"></script>
+    <script src="./dist/stack.js"></script>
+    <script type="module">
+      import 'https://unpkg.com/xterm@5.3.0/lib/xterm.js';
+      import 'https://unpkg.com/xterm-pty/index.js';
+      import './arg-module.js'
+      import initEmscriptenModule from './out.js';
+
+      const xterm = new Terminal();
+      xterm.open(document.getElementById("terminal"));
+
+      const { master, slave } = openpty();
+
+      xterm.loadAddon(master);
+
+      Module.pty = slave;
+
+      Module['mainScriptUrlOrBlob'] = location.origin + "/out.js";
+
+      var netParam = getNetParam();
+      if (!netParam) {
+          Module['preRun'].push((mod) => {
+              mod.FS.mkdir('/.wasmenv');
+          });
+          start();
+      } else {
+          if (netParam.mode == 'delegate') {
+              Module['websocket'] = {
+                  'url': netParam.param
+              };
+              Module['preRun'].push((mod) => {
+                  mod.FS.mkdir('/.wasmenv');
+              });
+              start();
+          } else if (netParam.mode == 'browser') {
+              const stackAddress = 'http://localhost:9999/'; // listened and served by MSW inside browser
+              const stackWorkerFile = location.origin + "/dist/stack-worker.js";
+              const stackImage = location.origin + "/c2w-net-proxy.wasm.gzip";
+              Module['websocket'] = {
+                  'url': stackAddress
+              };
+              Stack.Start(stackAddress, stackWorkerFile, stackImage, (cert) => {
+                  Module['preRun'].push((mod) => {
+                      mod.FS.mkdir('/.wasmenv');
+                      mod.FS.writeFile('/.wasmenv/proxy.crt', cert);
+                  });
+                  start();
+              });
+          }
+      }
+      function start() {
+          (async () => {
+              const instance = await initEmscriptenModule(Module);
+              
+              var oldPoll = Module['TTY'].stream_ops.poll;
+              var pty = Module['pty'];
+              Module['TTY'].stream_ops.poll = function(stream, timeout){
+                  if (!pty.readable) {
+                      return (pty.readable ? 1 : 0) | (pty.writable ? 4 : 0);
+                  }
+                  return oldPoll.call(stream, timeout);
+              }
+          })();
+      }
+      function getNetParam() {
+          var vars = location.search.substring(1).split('&');
+          for (var i = 0; i < vars.length; i++) {
+              var kv = vars[i].split('=');
+              if (decodeURIComponent(kv[0]) == 'net') {
+                  return {
+                      mode: kv[1],
+                      param: kv[2],
+                  };
+              }
+          }
+          return null;
+      }
+      function genmac(){
+          return "02:XX:XX:XX:XX:XX".replace(/X/g, function() {
+              return "0123456789ABCDEF".charAt(Math.floor(Math.random() * 16))
+          });
+      }
+    </script>
+  </body>
+</html>
