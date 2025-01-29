@@ -72,22 +72,21 @@ To enable networking, acccess to `localhost:8088?net=browser`.
 This runs a networking stack ([c2w-net-proxy.wasm](https://github.com/ktock/container2wasm/tree/da372f28342f73be1857e1ab5f67eae56280b021/extras/c2w-net-proxy)) inside browser relying on Fetch API for HTTP(S) connection to the outside of the browser.
 From the guest VM, that networking stack can be seen as a HTTP(S) proxy running inside browser.
 The proxy's certificate is shared to the guest VM via a mount `wasm0`.
-In the guest, you can setup the interface as the following.
 
-```
-# mount -t 9p -o trans=virtio wasm0 /mnt -oversion=9p2000.L
-# export SSL_CERT_FILE=/mnt/proxy.crt
-# export https_proxy=http://192.168.127.253:80
-# export http_proxy=http://192.168.127.253:80
-# export HTTPS_PROXY=http://192.168.127.253:80
-# export HTTP_PROXY=http://192.168.127.253:80
-# rc-service networking start
-```
+In the guest, by defualt, the following well-known proxy-related envvars are configured.
+
+- `SSL_CERT_FILE=/etc/wasmenv/proxy.crt`
+- `HTTP_PROXY=http://192.168.127.253:80`
+- `HTTPS_PROXY=http://192.168.127.253:80`
+- `http_proxy=http://192.168.127.253:80`
+- `https_proxy=http://192.168.127.253:80`
 
 In the guest, the following fetches a page from `https://ktock.github.io/container2wasm-demo/`.
 
 ```
 # wget -O - https://ktock.github.io/container2wasm-demo/
 ```
+
+> NOTE: you might need to wait for several seconds until the networking is fully configured.
 
 > NOTE: Also refer to [`../networking`](../networking) for details about networking.
