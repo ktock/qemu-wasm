@@ -15,6 +15,8 @@ RUN dd if=/dev/zero of=/out/disk-rootfs.img bs=150M count=1 && \
     mkfs.ext4 -O ^has_journal /out/disk-rootfs.img
 COPY ./init.sh /out/
 COPY ./create-image.sh /out/
+COPY ./setup-wasm-networking /out/
+COPY ./root-profile /out/
 COPY --from=create-image-dev /out/create-image /
 COPY ./create-image-args-x86_64.json .
 ARG PACKAGES
