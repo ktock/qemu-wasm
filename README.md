@@ -179,8 +179,8 @@ Ideally, all TBs should be translated to Wasm modules, but compilation overhead 
 
 ## Additional Resources
 
-- [`./examples/`](./examples): Examples (networking, virtfs, migration, etc...)
-- Using QEMU Wasm from container2wasm: https://github.com/ktock/container2wasm/tree/main/examples/emscripten-qemu
+- [`./examples/`](./examples): Containeing examples and docs about networking, virtfs, migration, etc.
+- Running containers inside browser with container2wasm integration: https://github.com/ktock/container2wasm/tree/v0.8.0/examples/emscripten
 
 ## Similar projects
 
