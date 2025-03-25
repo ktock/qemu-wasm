@@ -84,6 +84,24 @@ static inline int errno_to_dotl(int err) {
     } else if (err == EOPNOTSUPP) {
         err = 95; /* ==EOPNOTSUPP on Linux */
     }
+#elif defined(EMSCRIPTEN)
+    /*
+     * FIXME: Only most important errnos translated here yet, this should be
+     * extended to as many errnos being translated as possible in future.
+     */
+    if (err == ENAMETOOLONG) {
+        err = 36; /* ==ENAMETOOLONG on Linux */
+    } else if (err == ENOTEMPTY) {
+        err = 39; /* ==ENOTEMPTY on Linux */
+    } else if (err == ELOOP) {
+        err = 40; /* ==ELOOP on Linux */
+    } else if (err == ENODATA) {
+        err = 61; /* ==ENODATA on Linux */
+    } else if (err == ENOTSUP) {
+        err = 95; /* ==EOPNOTSUPP on Linux */
+    } else if (err == EOPNOTSUPP) {
+        err = 95; /* ==EOPNOTSUPP on Linux */
+    }
 #else
 #error Missing errno translation to Linux for this host system
 #endif
