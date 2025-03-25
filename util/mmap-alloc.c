@@ -145,6 +145,7 @@ static bool map_noreserve_effective(int fd, uint32_t qemu_map_flags)
     return false;
 }
 
+#ifndef EMSCRIPTEN
 /*
  * Reserve a new memory region of the requested size to be used for mapping
  * from the given fd (if any).
@@ -176,6 +177,7 @@ static void *mmap_reserve(size_t size, int fd)
 
     return mmap(0, size, PROT_NONE, flags, fd, 0);
 }
+#endif
 
 /*
  * Activate memory in a reserved region from the given fd (if any), to make
@@ -244,6 +246,21 @@ static inline size_t mmap_guard_pagesize(int fd)
 #endif
 }
 
+#ifdef EMSCRIPTEN
+void *qemu_ram_mmap(int fd,
+                    size_t size,
+                    size_t align,
+                    uint32_t qemu_map_flags,
+                    off_t map_offset)
+{
+    /*
+     * emscripten doesn't support non-zero first argument for mmap so
+     * mmap a larger region without the hint and return an aligned pointer.
+     */
+    void *ptr = mmap_activate(0, size + align, fd, qemu_map_flags, map_offset);
+    return (void *)QEMU_ALIGN_UP((uintptr_t)ptr, align);
+}
+#else
 void *qemu_ram_mmap(int fd,
                     size_t size,
                     size_t align,
@@ -293,6 +310,7 @@ void *qemu_ram_mmap(int fd,
 
     return ptr;
 }
+#endif /* EMSCRIPTEN */
 
 void qemu_ram_munmap(int fd, void *ptr, size_t size)
 {
