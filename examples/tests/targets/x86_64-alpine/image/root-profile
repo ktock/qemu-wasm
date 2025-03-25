@@ -1,0 +1,5 @@
+export SSL_CERT_FILE=/etc/wasmenv/proxy.crt
+export https_proxy=http://192.168.127.253:80
+export http_proxy=http://192.168.127.253:80
+export HTTPS_PROXY=http://192.168.127.253:80
+export HTTP_PROXY=http://192.168.127.253:80

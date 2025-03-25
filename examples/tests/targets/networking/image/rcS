@@ -1,0 +1,10 @@
+#!/bin/busybox sh
+
+mount -t proc proc /proc
+mount -t sysfs sysfs /sys
+mount -t tmpfs tmpfs /tmp
+
+mount -t tmpfs tmpfs /etc
+touch /etc/hosts /etc/resolv.conf
+udhcpc -i eth0
+
