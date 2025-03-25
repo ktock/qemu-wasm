@@ -1,0 +1,8 @@
+[
+    "-nographic", "-m", "512M", "-accel", "tcg",
+    "-nic", "user",
+    "-cdrom", "/out/alpine.iso",
+    "-drive", "file=/out/tmp.img,format=raw",
+    "-drive", "file=/out/disk-rootfs.img,format=raw",
+    "-drive", "file=fat:rw:/out/,format=raw"
+]

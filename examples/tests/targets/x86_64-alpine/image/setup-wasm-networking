@@ -1,0 +1,19 @@
+#!/sbin/openrc-run
+
+start() {
+    ebegin "Configuring networking"
+    ifup lo
+    if ! ifup -i /etc/network/interfaces eth0 > /dev/null 2>&1 ; then
+        ifdown -i /etc/network/interfaces eth0 > /dev/null 2>&1
+        eend 0
+        return 0
+    fi
+    mkdir -p /mnt/wasm0 /etc/wasmenv
+    if mount -t 9p -otrans=virtio,version=9p2000.L wasm0 /mnt/wasm0 ; then
+        if [ -f /mnt/wasm0/proxy.crt ] ; then
+            cp /mnt/wasm0/proxy.crt /etc/wasmenv/
+        fi
+    fi
+    eend 0
+    return 0
+}
