@@ -21,6 +21,12 @@ if get_option('tcg_interpreter')
   tcg_ss.add(libffi)
   tcg_ss.add(files('tci.c'))
 endif
+if host_os == 'emscripten'
+  libffi = dependency('libffi', version: '>=3.0', required: true,
+                      method: 'pkg-config')
+  specific_ss.add(libffi)
+  specific_ss.add(files('wasm32.c'))
+endif
 
 tcg_ss.add(when: libdw, if_true: files('debuginfo.c'))
 if host_os == 'linux'
