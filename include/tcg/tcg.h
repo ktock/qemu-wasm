@@ -218,6 +218,7 @@ typedef struct TCGv_ptr_d *TCGv_ptr;
 typedef struct TCGv_vec_d *TCGv_vec;
 typedef TCGv_ptr TCGv_env;
 
+#ifndef EMSCRIPTEN
 #if __SIZEOF_POINTER__ == 4
 typedef TCGv_i32 TCGv_vaddr;
 #elif __SIZEOF_POINTER__ == 8
@@ -225,6 +226,9 @@ typedef TCGv_i64 TCGv_vaddr;
 #else
 # error "sizeof pointer is different from {4,8}"
 #endif /* __SIZEOF_POINTER__ */
+#else
+typedef TCGv_i64 TCGv_vaddr;
+#endif
 
 /* call flags */
 /* Helper does not read globals (either directly or through an exception). It
