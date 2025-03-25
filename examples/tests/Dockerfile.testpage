@@ -1,0 +1,18 @@
+FROM ubuntu:24.04 AS cert-dev
+RUN apt-get update && apt-get install -y openssl
+RUN openssl req -subj "/CN=testpage" -addext "subjectAltName = DNS:testpage" \
+    -newkey rsa:2048 -nodes -keyout /server.key \
+    -x509 -days 365 -out /server.crt
+
+FROM httpd
+
+RUN echo "Include conf/extra/xterm-pty.conf" >> /usr/local/apache2/conf/httpd.conf
+RUN echo "LoadModule ssl_module modules/mod_ssl.so" >> /usr/local/apache2/conf/httpd.conf
+RUN echo "LoadModule socache_shmcb_module modules/mod_socache_shmcb.so" >> /usr/local/apache2/conf/httpd.conf
+RUN echo "Include conf/extra/httpd-ssl.conf" >> /usr/local/apache2/conf/httpd.conf
+
+COPY --from=cert-dev /server.key /usr/local/apache2/conf/server.key
+COPY --from=cert-dev /server.crt /usr/local/apache2/conf/server.crt
+COPY ./xterm-pty.conf /usr/local/apache2/conf/extra/xterm-pty.conf
+COPY ./htdocs /usr/local/apache2/htdocs
+COPY --from=htdocsassets / /usr/local/apache2/htdocs/
