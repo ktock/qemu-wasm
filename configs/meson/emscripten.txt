@@ -1,0 +1,6 @@
+[built-in options]
+c_args = ['-Wno-unused-command-line-argument','-g','-O3','-matomics','-mbulk-memory','-pthread']
+cpp_args = ['-Wno-unused-command-line-argument','-g','-O3','-matomics','-mbulk-memory','-pthread']
+objc_args = ['-Wno-unused-command-line-argument','-g','-O3','-matomics','-mbulk-memory','-pthread']
+c_link_args = ['-Wno-unused-command-line-argument','-g','-O3','-matomics','-mbulk-memory','-pthread','-sASYNCIFY=1','-sPROXY_TO_PTHREAD=1','-sFORCE_FILESYSTEM','-sALLOW_TABLE_GROWTH','-sTOTAL_MEMORY=2300MB','-sWASM_BIGINT','-sEXPORT_ES6=1','-sASYNCIFY_IMPORTS=ffi_call_js','-sEXPORTED_RUNTIME_METHODS=getTempRet0,setTempRet0,addFunction,removeFunction,TTY,FS','-sMALLOC=emmalloc','--memoryprofiler']
+cpp_link_args = ['-Wno-unused-command-line-argument','-g','-O3','-matomics','-mbulk-memory','-pthread','-sASYNCIFY=1','-sPROXY_TO_PTHREAD=1','-sFORCE_FILESYSTEM','-sALLOW_TABLE_GROWTH','-sTOTAL_MEMORY=2300MB','-sWASM_BIGINT','-sEXPORT_ES6=1','-sASYNCIFY_IMPORTS=ffi_call_js','-sEXPORTED_RUNTIME_METHODS=getTempRet0,setTempRet0,addFunction,removeFunction,TTY,FS','-sMALLOC=emmalloc','--memoryprofiler']
