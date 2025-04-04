@@ -26,6 +26,9 @@
 # include <sys/param.h>
 # include <sys/mount.h>
 #endif
+#ifdef EMSCRIPTEN
+#include <sys/vfs.h>
+#endif
 
 #define SM_LOCAL_MODE_BITS    0600
 #define SM_LOCAL_DIR_MODE_BITS    0700
