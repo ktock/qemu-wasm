@@ -102,10 +102,17 @@ static bool csr_qtest_callback(CharBackend *chr, gchar **words)
     return false;
 }
 
+static gpointer g_qtest_set_command_cb(
+    bool (*pc_cb)(CharBackend *chr, gchar **words))
+{
+    qtest_set_command_cb(pc_cb);
+    return NULL;
+}
+
 static void riscv_cpu_register_csr_qtest_callback(void)
 {
     static GOnce once;
-    g_once(&once, (GThreadFunc)qtest_set_command_cb, csr_qtest_callback);
+    g_once(&once, (GThreadFunc)g_qtest_set_command_cb, csr_qtest_callback);
 }
 #endif
 
