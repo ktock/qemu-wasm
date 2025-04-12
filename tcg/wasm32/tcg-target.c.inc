@@ -1718,6 +1718,7 @@ static void tcg_wasm_out_sub2_i64(TCGContext *s, TCGReg retl, TCGReg reth,
         tcg_wasm_out_op_local_get(s, TMP64_LOCAL_0_IDX);
         tcg_wasm_out_op_global_get_r(s, al);
         tcg_wasm_out_op_i64_gt_u(s);
+        tcg_wasm_out_op_i64_extend_i32_s(s);
 
         tcg_wasm_out_op_local_get(s, TMP64_LOCAL_0_IDX);
         tcg_wasm_out_op_global_set_r(s, retl);
@@ -1727,6 +1728,7 @@ static void tcg_wasm_out_sub2_i64(TCGContext *s, TCGReg retl, TCGReg reth,
         tcg_wasm_out_op_global_get_r(s, retl);
         tcg_wasm_out_op_global_get_r(s, al);
         tcg_wasm_out_op_i64_gt_u(s);
+        tcg_wasm_out_op_i64_extend_i32_s(s);
     }
 
     tcg_wasm_out_op_i64_sub(s);
