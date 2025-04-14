@@ -110,6 +110,10 @@
 #include <sys/diskslice.h>
 #endif
 
+#ifdef EMSCRIPTEN
+#include <sys/ioctl.h>
+#endif
+
 /* OS X does not have O_DSYNC */
 #ifndef O_DSYNC
 #ifdef O_SYNC
@@ -2010,6 +2014,7 @@ static int handle_aiocb_write_zeroes_unmap(void *opaque)
     return handle_aiocb_write_zeroes(aiocb);
 }
 
+#ifndef EMSCRIPTEN
 #ifndef HAVE_COPY_FILE_RANGE
 static off_t copy_file_range(int in_fd, off_t *in_off, int out_fd,
                              off_t *out_off, size_t len, unsigned int flags)
@@ -2022,6 +2027,7 @@ static off_t copy_file_range(int in_fd, off_t *in_off, int out_fd,
     return -1;
 #endif
 }
+#endif
 #endif
 
 /*
