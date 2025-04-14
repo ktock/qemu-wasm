@@ -1,9 +1,11 @@
+/* SPDX-License-Identifier: MIT */
 /*
- * posix specific declarations forked from os-posix.c, removing functions not
- * working on Emscripten
+ * posix specific declarations
  *
  * Copyright (c) 2003-2008 Fabrice Bellard
  * Copyright (c) 2010 Jes Sorensen <Jes.Sorensen@redhat.com>
+ *
+ * Forked from os-posix.h, removing functions not working on Emscripten
  *
  * Permission is hereby granted, free of charge, to any person obtaining a copy
  * of this software and associated documentation files (the "Software"), to deal
@@ -24,8 +26,8 @@
  * THE SOFTWARE.
  */
 
-#ifndef QEMU_OS_POSIX_H
-#define QEMU_OS_POSIX_H
+#ifndef QEMU_OS_WASM_H
+#define QEMU_OS_WASM_H
 
 #include <sys/mman.h>
 #include <sys/socket.h>
@@ -47,14 +49,15 @@ void os_set_line_buffering(void);
 void os_setup_early_signal_handling(void);
 void os_set_proc_name(const char *s);
 void os_setup_signal_handling(void);
-int os_set_daemonize(bool d);
-bool is_daemonized(void);
-void os_daemonize(void);
-bool os_set_runas(const char *user_id);
-void os_set_chroot(const char *path);
 void os_setup_limits(void);
 void os_setup_post(void);
 int os_mlock(bool on_fault);
+static inline int os_set_daemonize(bool d)
+{
+    return -1;
+};
+bool is_daemonized(void);
+static inline void os_daemonize(void) {}
 
 /**
  * qemu_alloc_stack:
