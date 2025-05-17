@@ -2076,19 +2076,6 @@ static void tcg_out_op_rrrbb(TCGContext *s, TCGOpcode op, TCGReg r0,
     tcg_out32(s, insn);
 }
 
-static void tcg_out_op_rrrr(TCGContext *s, TCGOpcode op,
-                            TCGReg r0, TCGReg r1, TCGReg r2, TCGReg r3)
-{
-    tcg_insn_unit_tci insn = 0;
-
-    insn = deposit32(insn, 0, 8, op);
-    insn = deposit32(insn, 8, 4, r0);
-    insn = deposit32(insn, 12, 4, r1);
-    insn = deposit32(insn, 16, 4, r2);
-    insn = deposit32(insn, 20, 4, r3);
-    tcg_out32(s, insn);
-}
-
 static void tcg_out_op_rrrrrc(TCGContext *s, TCGOpcode op,
                               TCGReg r0, TCGReg r1, TCGReg r2,
                               TCGReg r3, TCGReg r4, TCGCond c5)
@@ -2610,37 +2597,16 @@ static const TCGOutOpBinary outop_mul = {
     .out_rrr = tgen_mul,
 };
 
-static TCGConstraintSetIndex cset_mul2(TCGType type, unsigned flags)
-{
-    return type == TCG_TYPE_REG ? C_O2_I2(r, r, r, r) : C_NotImplemented;
-}
-
-static void tgen_muls2(TCGContext *s, TCGType type,
-                       TCGReg a0, TCGReg a1, TCGReg a2, TCGReg a3)
-{
-    tcg_out_op_rrrr(s, INDEX_op_muls2, a0, a1, a2, a3);
-}
-
 static const TCGOutOpMul2 outop_muls2 = {
-    .base.static_constraint = C_Dynamic,
-    .base.dynamic_constraint = cset_mul2,
-    .out_rrrr = tgen_muls2,
+    .base.static_constraint = C_NotImplemented,
 };
 
 static const TCGOutOpBinary outop_mulsh = {
     .base.static_constraint = C_NotImplemented,
 };
 
-static void tgen_mulu2(TCGContext *s, TCGType type,
-                       TCGReg a0, TCGReg a1, TCGReg a2, TCGReg a3)
-{
-    tcg_out_op_rrrr(s, INDEX_op_mulu2, a0, a1, a2, a3);
-}
-
 static const TCGOutOpMul2 outop_mulu2 = {
-    .base.static_constraint = C_Dynamic,
-    .base.dynamic_constraint = cset_mul2,
-    .out_rrrr = tgen_mulu2,
+    .base.static_constraint = C_NotImplemented,
 };
 
 static const TCGOutOpBinary outop_muluh = {
