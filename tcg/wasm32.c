@@ -55,12 +55,15 @@ EM_JS(int, instantiate_wasm, (), {
         const import_vec_size = memory_v.getInt32(wasm_begin + wasm_size, true);
         const import_vec_begin = wasm_begin + wasm_size + 4;
 
-        const wasm = HEAP8.subarray(wasm_begin, wasm_begin + wasm_size);
+        // Create a full copy of the bytes instead of a subarray view to fix Firefox compatibility
+        // See: https://bugzilla.mozilla.org/show_bug.cgi?id=1965217
+        const wasmBytes = new Uint8Array(HEAP8.slice(wasm_begin, wasm_begin + wasm_size));
+        
         var helper = {};
         for (var i = 0; i < import_vec_size / 4; i++) {
             helper[i] = wasmTable.get(memory_v.getInt32(import_vec_begin + i * 4, true));
         }
-        const mod = new WebAssembly.Module(wasm);
+        const mod = new WebAssembly.Module(wasmBytes);
         const inst = new WebAssembly.Instance(mod, {
                 "env": {
                     "buffer": wasmMemory,
