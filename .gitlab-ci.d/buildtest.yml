@@ -800,4 +800,4 @@ build-wasm:
     job: wasm-emsdk-cross-container
   variables:
     IMAGE: emsdk-wasm32-cross
-    CONFIGURE_ARGS: --static --disable-tools --enable-debug --enable-tcg-interpreter
+    CONFIGURE_ARGS: --static --disable-tools --enable-debug
