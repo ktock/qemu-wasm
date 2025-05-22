@@ -367,10 +367,12 @@ uintptr_t QEMU_DISABLE_CFI tcg_qemu_tb_exec(CPUArchState *env,
                 ffi_cif *cif;
                 void *func;
                 unsigned i, s, n;
+                tcg_target_ulong *data;
 
                 tci_args_nl(insn, tb_ptr, &len, &ptr);
-                func = ((void **)ptr)[0];
-                cif = ((void **)ptr)[1];
+                data = ptr;
+                func = (void *)data[0];
+                cif = (void *)data[1];
 
                 n = cif->nargs;
                 for (i = s = 0; i < n; ++i) {
