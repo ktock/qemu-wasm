@@ -7,9 +7,9 @@
 #ifndef TCG_TARGET_REG_BITS_H
 #define TCG_TARGET_REG_BITS_H
 
-#if UINTPTR_MAX == UINT32_MAX
+#if TCG_VADDR_BITS == 32
 # define TCG_TARGET_REG_BITS 32
-#elif UINTPTR_MAX == UINT64_MAX
+#elif TCG_VADDR_BITS == 64
 # define TCG_TARGET_REG_BITS 64
 #else
 # error Unknown pointer size for tci target
