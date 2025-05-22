@@ -1,0 +1,3 @@
+FROM selenium/node-firefox:138.0
+COPY --from=test-page /usr/local/apache2/conf/server.crt ./server.crt
+RUN certutil -d sql:$HOME/.pki/nssdb -A -t "P,," -n testing -i ./server.crt
