@@ -3229,6 +3229,9 @@ endif
 
 # Detect host pointer size for the target configuration loop.
 host_long_bits = cc.sizeof('void *') * 8
+tcg_vaddr_bits = host_arch == 'wasm32' ? 64 : host_long_bits
+
+config_host_data.set('TCG_VADDR_BITS', tcg_vaddr_bits)
 
 ########################
 # Target configuration #
@@ -3327,7 +3330,7 @@ foreach target : target_dirs
   target_kconfig = []
   foreach sym: accelerators
     # Disallow 64-bit on 32-bit emulation and virtualization
-    if host_long_bits < config_target['TARGET_LONG_BITS'].to_int()
+    if tcg_vaddr_bits < config_target['TARGET_LONG_BITS'].to_int()
       continue
     endif
     if sym == 'CONFIG_TCG' or target in accelerator_targets.get(sym, [])
