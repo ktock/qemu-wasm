@@ -26,7 +26,7 @@
 #include "tcg-has.h"
 #include <ffi.h>
 #include <emscripten.h>
-#include "wasm32.h"
+#include "wasm.h"
 
 
 #define ctpop_tr    glue(ctpop, TCG_TARGET_REG_BITS)
@@ -49,32 +49,45 @@ __thread uintptr_t tci_tb_ptr;
 /* TBs executed more than this value will be compiled to wasm */
 #define INSTANTIATE_NUM 1500
 
-EM_JS(int, instantiate_wasm, (int wasm_begin,
-                              int wasm_size,
-                              int import_vec_begin,
-                              int import_vec_size),
+#define EM_JS_PRE(ret, name, args, body...) EM_JS(ret, name, args, body)
+
+#define DEC_PTR(p) bigintToI53Checked(p)
+#define ENC_PTR(p) BigInt(p)
+#if defined(WASM64_MEMORY64_2)
+#define ENC_WASM_TABLE_IDX(i) Number(i)
+#else
+#define ENC_WASM_TABLE_IDX(i) i
+#endif
+
+EM_JS_PRE(void*, instantiate_wasm, (void *wasm_begin,
+                                    int wasm_size,
+                                    void *import_vec_begin,
+                                    int import_vec_size),
 {
     const memory_v = new DataView(HEAP8.buffer);
-    const wasm = HEAP8.subarray(wasm_begin, wasm_begin + wasm_size);
+    const wasm = HEAP8.subarray(DEC_PTR(wasm_begin),
+                                DEC_PTR(wasm_begin) + wasm_size);
     var helper = {};
     helper.u = () => {
         return (Asyncify.state != Asyncify.State.Unwinding) ? 1 : 0;
     };
-    for (var i = 0; i < import_vec_size / 4; i++) {
-        helper[i] = wasmTable.get(
-            memory_v.getInt32(import_vec_begin + i * 4, true));
+    const entsize = TCG_TARGET_REG_BITS / 8;
+    for (var i = 0; i < import_vec_size / entsize; i++) {
+        const idx = memory_v.getBigInt64(
+            DEC_PTR(import_vec_begin) + i * entsize, true);
+        helper[i] = wasmTable.get(ENC_WASM_TABLE_IDX(idx));
     }
     const mod = new WebAssembly.Module(new Uint8Array(wasm));
     const inst = new WebAssembly.Instance(mod, {
             "env" : {
-                "buffer" : wasmMemory,
+                "memory" : wasmMemory,
             },
             "helper" : helper,
     });
 
-    Module.__wasm32_tb.inst_gc_registry.register(inst, "tbinstance");
+    Module.__wasm_tb.inst_gc_registry.register(inst, "tbinstance");
 
-    return addFunction(inst.exports.start, 'ii');
+    return ENC_PTR(addFunction(inst.exports.start, 'ii'));
 });
 
 static void tci_write_reg64(tcg_target_ulong *regs, uint32_t high_index,
@@ -992,7 +1005,7 @@ static wasm_tb_func get_instance_from_tb(void *tb_ptr)
     return elm->tb_func;
 }
 
-static void check_instance_garbage_collected(void)
+static void check_gc_completion(void)
 {
     if (instance_done_gc > 0) {
         qatomic_sub(&instances_global, instance_done_gc);
@@ -1001,14 +1014,14 @@ static void check_instance_garbage_collected(void)
     }
 }
 
-EM_JS(void, init_wasm32_js, (int instance_done_gc_ptr),
+EM_JS_PRE(void, init_wasm_js, (void *instance_done_gc),
 {
-    Module.__wasm32_tb = {
+    Module.__wasm_tb = {
         inst_gc_registry: new FinalizationRegistry((i) => {
             if (i == "tbinstance") {
                 const memory_v = new DataView(HEAP8.buffer);
-                let v = memory_v.getInt32(instance_done_gc_ptr, true);
-                memory_v.setInt32(instance_done_gc_ptr, v + 1, true);
+                let v = memory_v.getInt32(instance_done_gc, true);
+                memory_v.setInt32(instance_done_gc, v + 1, true);
             }
         })
     };
@@ -1025,7 +1038,7 @@ static inline void trysleep(void)
     if (--exec_cnt == 0) {
         if (!can_add_instance()) {
             emscripten_sleep(0);
-            check_instance_garbage_collected();
+            check_gc_completion();
         }
         exec_cnt = MAX_EXEC_NUM;
     }
@@ -1033,13 +1046,13 @@ static inline void trysleep(void)
 
 int thread_idx_max;
 
-static void init_wasm32(void)
+static void init_wasm(void)
 {
     thread_idx = qatomic_fetch_inc(&thread_idx_max);
     ctx.stack = g_malloc(TCG_STATIC_CALL_ARGS_SIZE + TCG_STATIC_FRAME_SIZE);
     ctx.buf128 = g_malloc(16);
     ctx.tci_tb_ptr = (uint32_t *)&tci_tb_ptr;
-    init_wasm32_js((int)&instance_done_gc);
+    init_wasm_js(&instance_done_gc);
 }
 
 __thread bool initdone;
@@ -1047,7 +1060,7 @@ __thread bool initdone;
 uintptr_t tcg_qemu_tb_exec(CPUArchState *env, const void *v_tb_ptr)
 {
     if (!initdone) {
-        init_wasm32();
+        init_wasm();
         initdone = true;
     }
     ctx.env = env;
@@ -1056,7 +1069,8 @@ uintptr_t tcg_qemu_tb_exec(CPUArchState *env, const void *v_tb_ptr)
         trysleep();
         struct wasmTBHeader *header = (struct wasmTBHeader *)ctx.tb_ptr;
         int32_t counter = get_counter_local(header);
-        uint32_t res;
+        uintptr_t res;
+        /* res = tcg_qemu_tb_exec_tci(env); */
         wasm_tb_func tb_func = get_instance_from_tb(ctx.tb_ptr);
         if (tb_func) {
             /*
@@ -1075,15 +1089,15 @@ uintptr_t tcg_qemu_tb_exec(CPUArchState *env, const void *v_tb_ptr)
              * instances and keep running this TB on TCI
              */
             remove_old_instances();
-            check_instance_garbage_collected();
+            check_gc_completion();
             res = tcg_qemu_tb_exec_tci(env);
         } else {
             /*
              * instantiate and run TB as Wasm
              */
-            tb_func = (wasm_tb_func)instantiate_wasm((int)header->wasm_ptr,
+            tb_func = (wasm_tb_func)instantiate_wasm(header->wasm_ptr,
                                                      header->wasm_size,
-                                                     (int)header->import_ptr,
+                                                     header->import_ptr,
                                                      header->import_size);
             add_instance(tb_func, ctx.tb_ptr);
             res = call_wasm_tb(tb_func, &ctx);

@@ -1,3 +1,4 @@
+/* SPDX-License-Identifier: MIT */
 /*
  * Tiny Code Generator for QEMU
  *

@@ -24,7 +24,7 @@ elif host_os == 'emscripten'
   libffi = dependency('libffi', version: '>=3.0', required: true,
                       method: 'pkg-config')
   specific_ss.add(libffi)
-  specific_ss.add(files('wasm32.c'))
+  specific_ss.add(files('wasm.c'))
 endif
 
 tcg_ss.add(when: libdw, if_true: files('debuginfo.c'))
