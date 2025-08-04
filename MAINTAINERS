@@ -3999,6 +3999,12 @@ F: tcg/tci/
 F: tcg/tci.c
 F: disas/tci.c
 
+WebAssembly TCG target
+M: Kohei Tokunaga <ktokunaga.mail@gmail.com>
+S: Maintained
+F: tcg/wasm/
+F: tcg/wasm.c
+
 Block drivers
 -------------
 VMDK
