@@ -123,6 +123,20 @@ typedef enum {
     OPC_GLOBAL_GET = 0x23,
     OPC_GLOBAL_SET = 0x24,
 
+    OPC_I32_LOAD = 0x28,
+    OPC_I64_LOAD = 0x29,
+    OPC_I64_LOAD8_S = 0x30,
+    OPC_I64_LOAD8_U = 0x31,
+    OPC_I64_LOAD16_S = 0x32,
+    OPC_I64_LOAD16_U = 0x33,
+    OPC_I64_LOAD32_S = 0x34,
+    OPC_I64_LOAD32_U = 0x35,
+    OPC_I32_STORE = 0x36,
+    OPC_I64_STORE = 0x37,
+    OPC_I64_STORE8 = 0x3c,
+    OPC_I64_STORE16 = 0x3d,
+    OPC_I64_STORE32 = 0x3e,
+
     OPC_I32_CONST = 0x41,
     OPC_I64_CONST = 0x42,
 
@@ -148,6 +162,7 @@ typedef enum {
     OPC_I64_GE_S = 0x59,
     OPC_I64_GE_U = 0x5a,
 
+    OPC_I32_ADD = 0x6a,
     OPC_I32_SHL = 0x74,
     OPC_I32_SHR_S = 0x75,
     OPC_I32_SHR_U = 0x76,
@@ -283,6 +298,24 @@ static void tcg_wasm_out_op_not(TCGContext *s)
     tcg_wasm_out_op(s, OPC_I64_XOR);
 }
 
+/*
+ * The size of the offset field of Wasm's load/store instruction defers
+ * depending on the "-sMEMORY64" flag value: 64bit when "-sMEMORY64=1"
+ * and 32bit when "-sMEMORY64=2".
+ */
+#if defined(WASM64_MEMORY64_2)
+typedef uint32_t wasm_ldst_offset_t;
+#else
+typedef uint64_t wasm_ldst_offset_t;
+#endif
+static void tcg_wasm_out_op_ldst(
+    TCGContext *s, WasmInsn instr, uint32_t a, wasm_ldst_offset_t o)
+{
+    tcg_wasm_out_op(s, instr);
+    tcg_wasm_out_leb128(s, a);
+    tcg_wasm_out_leb128(s, (wasm_ldst_offset_t)o);
+}
+
 static void tcg_wasm_out_o1_i2(
     TCGContext *s, WasmInsn opc, TCGReg ret, TCGReg arg1, TCGReg arg2)
 {
@@ -311,6 +344,54 @@ static void tcg_wasm_out_o1_i2_type(
     default:
         g_assert_not_reached();
     }
+}
+
+/*
+ * tcg_wasm_out_norm_ptr emits instructions to adjust the 64bit pointer value
+ * at the top of the stack to satisfy Wasm's memory addressing requirements.
+ */
+static intptr_t tcg_wasm_out_norm_ptr(TCGContext *s, intptr_t offset)
+{
+#if defined(WASM64_MEMORY64_2)
+    /*
+     * If Emscripten's "-sMEMORY64=2" is enabled,
+     * the address size is limited to 32bit.
+     */
+    tcg_wasm_out_op(s, OPC_I32_WRAP_I64);
+#endif
+    /*
+     * Wasm's load/store instructions don't support negative value in
+     * the offset field. So this function calculates the target address
+     * using the base and the offset and makes the offset field 0.
+     */
+    if (offset < 0) {
+#if defined(WASM64_MEMORY64_2)
+        tcg_wasm_out_op_const(s, OPC_I32_CONST, offset);
+        tcg_wasm_out_op(s, OPC_I32_ADD);
+#else
+        tcg_wasm_out_op_const(s, OPC_I64_CONST, offset);
+        tcg_wasm_out_op(s, OPC_I64_ADD);
+#endif
+        offset = 0;
+    }
+    return offset;
+}
+static void tcg_wasm_out_ld(
+    TCGContext *s, WasmInsn opc, TCGReg val, TCGReg base, intptr_t offset)
+{
+    tcg_wasm_out_op_idx(s, OPC_GLOBAL_GET, REG_IDX(base));
+    offset = tcg_wasm_out_norm_ptr(s, offset);
+    tcg_wasm_out_op_ldst(s, opc, 0, offset);
+    tcg_wasm_out_op_idx(s, OPC_GLOBAL_SET, REG_IDX(val));
+}
+
+static void tcg_wasm_out_st(
+    TCGContext *s, WasmInsn opc, TCGReg val, TCGReg base, intptr_t offset)
+{
+    tcg_wasm_out_op_idx(s, OPC_GLOBAL_GET, REG_IDX(base));
+    offset = tcg_wasm_out_norm_ptr(s, offset);
+    tcg_wasm_out_op_idx(s, OPC_GLOBAL_GET, REG_IDX(val));
+    tcg_wasm_out_op_ldst(s, opc, 0, offset);
 }
 
 static const struct {
@@ -677,11 +758,14 @@ static void tcg_out_ld(TCGContext *s, TCGType type, TCGReg val, TCGReg base,
                        intptr_t offset)
 {
     TCGOpcode op = INDEX_op_ld;
+    WasmInsn wasm_opc = OPC_I64_LOAD;
 
     if (TCG_TARGET_REG_BITS == 64 && type == TCG_TYPE_I32) {
         op = INDEX_op_ld32u;
+        wasm_opc = OPC_I64_LOAD32_U;
     }
     tcg_out_ldst(s, op, val, base, offset);
+    tcg_wasm_out_ld(s, wasm_opc, val, base, offset);
 }
 
 static bool tcg_out_mov(TCGContext *s, TCGType type, TCGReg ret, TCGReg arg)
@@ -1450,6 +1534,7 @@ static void tgen_ld8u(TCGContext *s, TCGType type, TCGReg dest,
                       TCGReg base, ptrdiff_t offset)
 {
     tcg_out_ldst(s, INDEX_op_ld8u, dest, base, offset);
+    tcg_wasm_out_ld(s, OPC_I64_LOAD8_U, dest, base, offset);
 }
 
 static const TCGOutOpLoad outop_ld8u = {
@@ -1461,6 +1546,7 @@ static void tgen_ld8s(TCGContext *s, TCGType type, TCGReg dest,
                       TCGReg base, ptrdiff_t offset)
 {
     tcg_out_ldst(s, INDEX_op_ld8s, dest, base, offset);
+    tcg_wasm_out_ld(s, OPC_I64_LOAD8_S, dest, base, offset);
 }
 
 static const TCGOutOpLoad outop_ld8s = {
@@ -1472,6 +1558,7 @@ static void tgen_ld16u(TCGContext *s, TCGType type, TCGReg dest,
                        TCGReg base, ptrdiff_t offset)
 {
     tcg_out_ldst(s, INDEX_op_ld16u, dest, base, offset);
+    tcg_wasm_out_ld(s, OPC_I64_LOAD16_U, dest, base, offset);
 }
 
 static const TCGOutOpLoad outop_ld16u = {
@@ -1483,6 +1570,7 @@ static void tgen_ld16s(TCGContext *s, TCGType type, TCGReg dest,
                        TCGReg base, ptrdiff_t offset)
 {
     tcg_out_ldst(s, INDEX_op_ld16s, dest, base, offset);
+    tcg_wasm_out_ld(s, OPC_I64_LOAD16_S, dest, base, offset);
 }
 
 static const TCGOutOpLoad outop_ld16s = {
@@ -1495,6 +1583,7 @@ static void tgen_ld32u(TCGContext *s, TCGType type, TCGReg dest,
                        TCGReg base, ptrdiff_t offset)
 {
     tcg_out_ldst(s, INDEX_op_ld32u, dest, base, offset);
+    tcg_wasm_out_ld(s, OPC_I64_LOAD32_U, dest, base, offset);
 }
 
 static const TCGOutOpLoad outop_ld32u = {
@@ -1506,6 +1595,7 @@ static void tgen_ld32s(TCGContext *s, TCGType type, TCGReg dest,
                        TCGReg base, ptrdiff_t offset)
 {
     tcg_out_ldst(s, INDEX_op_ld32s, dest, base, offset);
+    tcg_wasm_out_ld(s, OPC_I64_LOAD32_S, dest, base, offset);
 }
 
 static const TCGOutOpLoad outop_ld32s = {
@@ -1518,6 +1608,7 @@ static void tgen_st8(TCGContext *s, TCGType type, TCGReg data,
                      TCGReg base, ptrdiff_t offset)
 {
     tcg_out_ldst(s, INDEX_op_st8, data, base, offset);
+    tcg_wasm_out_st(s, OPC_I64_STORE8, data, base, offset);
 }
 
 static const TCGOutOpStore outop_st8 = {
@@ -1529,6 +1620,7 @@ static void tgen_st16(TCGContext *s, TCGType type, TCGReg data,
                       TCGReg base, ptrdiff_t offset)
 {
     tcg_out_ldst(s, INDEX_op_st16, data, base, offset);
+    tcg_wasm_out_st(s, OPC_I64_STORE16, data, base, offset);
 }
 
 static const TCGOutOpStore outop_st16 = {
@@ -1575,11 +1667,14 @@ static void tcg_out_st(TCGContext *s, TCGType type, TCGReg val, TCGReg base,
                        intptr_t offset)
 {
     TCGOpcode op = INDEX_op_st;
+    WasmInsn wasm_opc = OPC_I64_STORE;
 
     if (TCG_TARGET_REG_BITS == 64 && type == TCG_TYPE_I32) {
         op = INDEX_op_st32;
+        wasm_opc = OPC_I64_STORE32;
     }
     tcg_out_ldst(s, op, val, base, offset);
+    tcg_wasm_out_st(s, wasm_opc, val, base, offset);
 }
 
 static inline bool tcg_out_sti(TCGContext *s, TCGType type, TCGArg val,

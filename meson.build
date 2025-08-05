@@ -393,6 +393,10 @@ elif host_os == 'windows'
   if compiler.get_id() == 'clang' and compiler.get_linker_id() != 'ld.lld'
     error('On windows, you need to use lld with clang - use msys2 clang64/clangarm64 env')
   endif
+elif host_os == 'emscripten'
+  if cpu == 'wasm64' and get_option('wasm64_32bit_address_limit')
+    qemu_common_flags += '-DWASM64_MEMORY64_2'
+  endif
 endif
 
 # Choose instruction set (currently x86-only)
