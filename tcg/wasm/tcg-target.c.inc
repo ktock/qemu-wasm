@@ -169,6 +169,10 @@ typedef enum {
     OPC_I64_GE_U = 0x5a,
 
     OPC_I32_ADD = 0x6a,
+    OPC_I32_DIV_S = 0x6d,
+    OPC_I32_DIV_U = 0x6e,
+    OPC_I32_REM_S = 0x6f,
+    OPC_I32_REM_U = 0x70,
     OPC_I32_AND = 0x71,
     OPC_I32_OR = 0x72,
     OPC_I32_SHL = 0x74,
@@ -179,6 +183,10 @@ typedef enum {
     OPC_I64_ADD = 0x7c,
     OPC_I64_SUB = 0x7d,
     OPC_I64_MUL = 0x7e,
+    OPC_I64_DIV_S = 0x7f,
+    OPC_I64_DIV_U = 0x80,
+    OPC_I64_REM_S = 0x81,
+    OPC_I64_REM_U = 0x82,
     OPC_I64_AND = 0x83,
     OPC_I64_OR = 0x84,
     OPC_I64_XOR = 0x85,
@@ -1223,6 +1231,7 @@ static void tgen_divs(TCGContext *s, TCGType type,
                      ? INDEX_op_tci_divs32
                      : INDEX_op_divs);
     tcg_out_op_rrr(s, opc, a0, a1, a2);
+    tcg_wasm_out_o1_i2_type(s, type, OPC_I32_DIV_S, OPC_I64_DIV_S, a0, a1, a2);
 }
 
 static const TCGOutOpBinary outop_divs = {
@@ -1241,6 +1250,7 @@ static void tgen_divu(TCGContext *s, TCGType type,
                      ? INDEX_op_tci_divu32
                      : INDEX_op_divu);
     tcg_out_op_rrr(s, opc, a0, a1, a2);
+    tcg_wasm_out_o1_i2_type(s, type, OPC_I32_DIV_U, OPC_I64_DIV_U, a0, a1, a2);
 }
 
 static const TCGOutOpBinary outop_divu = {
@@ -1377,6 +1387,7 @@ static void tgen_rems(TCGContext *s, TCGType type,
                      ? INDEX_op_tci_rems32
                      : INDEX_op_rems);
     tcg_out_op_rrr(s, opc, a0, a1, a2);
+    tcg_wasm_out_o1_i2_type(s, type, OPC_I32_REM_S, OPC_I64_REM_S, a0, a1, a2);
 }
 
 static const TCGOutOpBinary outop_rems = {
@@ -1391,6 +1402,7 @@ static void tgen_remu(TCGContext *s, TCGType type,
                      ? INDEX_op_tci_remu32
                      : INDEX_op_remu);
     tcg_out_op_rrr(s, opc, a0, a1, a2);
+    tcg_wasm_out_o1_i2_type(s, type, OPC_I32_REM_U, OPC_I64_REM_U, a0, a1, a2);
 }
 
 static const TCGOutOpBinary outop_remu = {
