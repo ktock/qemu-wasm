@@ -25,6 +25,7 @@
 #include "disas/dis-asm.h"
 #include "tcg-has.h"
 #include <ffi.h>
+#include <emscripten.h>
 
 
 #define ctpop_tr    glue(ctpop, TCG_TARGET_REG_BITS)
@@ -43,6 +44,42 @@
 #endif
 
 __thread uintptr_t tci_tb_ptr;
+
+#define EM_JS_PRE(ret, name, args, body...) EM_JS(ret, name, args, body)
+
+#define DEC_PTR(p) bigintToI53Checked(p)
+#define ENC_PTR(p) BigInt(p)
+#if defined(WASM64_MEMORY64_2)
+#define ENC_WASM_TABLE_IDX(i) Number(i)
+#else
+#define ENC_WASM_TABLE_IDX(i) i
+#endif
+
+EM_JS_PRE(void*, instantiate_wasm, (void *wasm_begin,
+                                    int wasm_size,
+                                    void *import_vec_begin,
+                                    int import_vec_size),
+{
+    const memory_v = new DataView(HEAP8.buffer);
+    const wasm = HEAP8.subarray(DEC_PTR(wasm_begin),
+                                DEC_PTR(wasm_begin) + wasm_size);
+    var helper = {};
+    const entsize = TCG_TARGET_REG_BITS / 8;
+    for (var i = 0; i < import_vec_size / entsize; i++) {
+        const idx = memory_v.getBigInt64(
+            DEC_PTR(import_vec_begin) + i * entsize, true);
+        helper[i] = wasmTable.get(ENC_WASM_TABLE_IDX(idx));
+    }
+    const mod = new WebAssembly.Module(new Uint8Array(wasm));
+    const inst = new WebAssembly.Instance(mod, {
+            "env" : {
+                "memory" : wasmMemory,
+            },
+            "helper" : helper,
+    });
+
+    return ENC_PTR(addFunction(inst.exports.start, 'ii'));
+});
 
 static void tci_write_reg64(tcg_target_ulong *regs, uint32_t high_index,
                             uint32_t low_index, uint64_t value)
