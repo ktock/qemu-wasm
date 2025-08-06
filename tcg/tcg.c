@@ -1121,7 +1121,7 @@ typedef struct TCGOutOpSubtract {
 
 #include "tcg-target.c.inc"
 
-#if !defined(CONFIG_TCG_INTERPRETER) && !defined(EMSCRIPTEN)
+#if !defined(CONFIG_TCG_INTERPRETER)
 /* Validate CPUTLBDescFast placement. */
 QEMU_BUILD_BUG_ON((int)(offsetof(CPUNegativeOffsetState, tlb.f[0]) -
                         sizeof(CPUNegativeOffsetState))
