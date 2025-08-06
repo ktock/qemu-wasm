@@ -117,8 +117,36 @@ static const uint8_t tcg_target_reg_index[TCG_TARGET_NB_REGS] = {
 #define REG_IDX(r) tcg_target_reg_index[r]
 
 typedef enum {
+    OPC_IF = 0x04,
+    OPC_ELSE = 0x05,
+    OPC_END = 0x0b,
     OPC_GLOBAL_GET = 0x23,
     OPC_GLOBAL_SET = 0x24,
+
+    OPC_I32_CONST = 0x41,
+    OPC_I64_CONST = 0x42,
+
+    OPC_I32_EQ = 0x46,
+    OPC_I32_NE = 0x47,
+    OPC_I32_LT_S = 0x48,
+    OPC_I32_LT_U = 0x49,
+    OPC_I32_GT_S = 0x4a,
+    OPC_I32_GT_U = 0x4b,
+    OPC_I32_LE_S = 0x4c,
+    OPC_I32_LE_U = 0x4d,
+    OPC_I32_GE_S = 0x4e,
+    OPC_I32_GE_U = 0x4f,
+
+    OPC_I64_EQ = 0x51,
+    OPC_I64_NE = 0x52,
+    OPC_I64_LT_S = 0x53,
+    OPC_I64_LT_U = 0x54,
+    OPC_I64_GT_S = 0x55,
+    OPC_I64_GT_U = 0x56,
+    OPC_I64_LE_S = 0x57,
+    OPC_I64_LE_U = 0x58,
+    OPC_I64_GE_S = 0x59,
+    OPC_I64_GE_U = 0x5a,
 
     OPC_I32_SHL = 0x74,
     OPC_I32_SHR_S = 0x75,
@@ -137,6 +165,12 @@ typedef enum {
     OPC_I32_WRAP_I64 = 0xa7,
     OPC_I64_EXTEND_I32_U = 0xad,
 } WasmInsn;
+
+typedef enum {
+    BLOCK_NORET = 0x40,
+    BLOCK_I64 = 0x7e,
+    BLOCK_I32 = 0x7f,
+} WasmBlockType;
 
 #define BUF_SIZE 1024
 typedef struct LinkedBufEntry {
@@ -172,6 +206,23 @@ static void linked_buf_out_leb128(LinkedBuf *p, uint64_t v)
     } while (v != 0);
 }
 
+static void linked_buf_out_sleb128(LinkedBuf *p, int64_t v)
+{
+    bool more = true;
+    uint8_t b;
+    while (more) {
+        b = v & 0x7f;
+        v >>= 7;
+        if (((v == 0) && ((b & 0x40) == 0)) ||
+            ((v == -1) && ((b & 0x40) != 0))) {
+            more = false;
+        } else {
+            b |= 0x80;
+        }
+        linked_buf_out8(p, b);
+    }
+}
+
 /*
  * wasm code is generataed in the dynamically allocated buffer which
  * are managed as a linked list.
@@ -190,6 +241,10 @@ static void tcg_wasm_out_leb128(TCGContext *s, uint64_t v)
 {
     linked_buf_out_leb128(&sub_buf, v);
 }
+static void tcg_wasm_out_sleb128(TCGContext *s, int64_t v)
+{
+    linked_buf_out_sleb128(&sub_buf, v);
+}
 
 static void tcg_wasm_out_op(TCGContext *s, WasmInsn opc)
 {
@@ -199,6 +254,30 @@ static void tcg_wasm_out_op_idx(TCGContext *s, WasmInsn opc, uint32_t idx)
 {
     tcg_wasm_out8(s, opc);
     tcg_wasm_out_leb128(s, idx);
+}
+static void tcg_wasm_out_op_block(TCGContext *s, WasmInsn opc, WasmBlockType t)
+{
+    tcg_wasm_out8(s, opc);
+    tcg_wasm_out8(s, t);
+}
+static void tcg_wasm_out_op_const(TCGContext *s, WasmInsn opc, int64_t v)
+{
+    tcg_wasm_out8(s, opc);
+    switch (opc) {
+    case OPC_I32_CONST:
+        tcg_wasm_out_sleb128(s, (int32_t)v);
+        break;
+    case OPC_I64_CONST:
+        tcg_wasm_out_sleb128(s, v);
+        break;
+    default:
+        g_assert_not_reached();
+    }
+}
+static void tcg_wasm_out_op_not(TCGContext *s)
+{
+    tcg_wasm_out_op_const(s, OPC_I64_CONST, -1);
+    tcg_wasm_out_op(s, OPC_I64_XOR);
 }
 
 static void tcg_wasm_out_o1_i2(
@@ -229,6 +308,76 @@ static void tcg_wasm_out_o1_i2_type(
     default:
         g_assert_not_reached();
     }
+}
+
+static const struct {
+    WasmInsn i32;
+    WasmInsn i64;
+} tcg_cond_to_inst[] = {
+    [TCG_COND_EQ] =  { OPC_I32_EQ,   OPC_I64_EQ },
+    [TCG_COND_NE] =  { OPC_I32_NE,   OPC_I64_NE },
+    [TCG_COND_LT] =  { OPC_I32_LT_S, OPC_I64_LT_S },
+    [TCG_COND_GE] =  { OPC_I32_GE_S, OPC_I64_GE_S },
+    [TCG_COND_LE] =  { OPC_I32_LE_S, OPC_I64_LE_S },
+    [TCG_COND_GT] =  { OPC_I32_GT_S, OPC_I64_GT_S },
+    [TCG_COND_LTU] = { OPC_I32_LT_U, OPC_I64_LT_U },
+    [TCG_COND_GEU] = { OPC_I32_GE_U, OPC_I64_GE_U },
+    [TCG_COND_LEU] = { OPC_I32_LE_U, OPC_I64_LE_U },
+    [TCG_COND_GTU] = { OPC_I32_GT_U, OPC_I64_GT_U }
+};
+
+static void tcg_wasm_out_cond(
+    TCGContext *s, TCGType type, TCGCond cond, TCGReg arg1, TCGReg arg2)
+{
+    switch (type) {
+    case TCG_TYPE_I32:
+        tcg_wasm_out_op_idx(s, OPC_GLOBAL_GET, REG_IDX(arg1));
+        tcg_wasm_out_op(s, OPC_I32_WRAP_I64);
+        tcg_wasm_out_op_idx(s, OPC_GLOBAL_GET, REG_IDX(arg2));
+        tcg_wasm_out_op(s, OPC_I32_WRAP_I64);
+        tcg_wasm_out_op(s, tcg_cond_to_inst[cond].i32);
+        break;
+    case TCG_TYPE_I64:
+        tcg_wasm_out_op_idx(s, OPC_GLOBAL_GET, REG_IDX(arg1));
+        tcg_wasm_out_op_idx(s, OPC_GLOBAL_GET, REG_IDX(arg2));
+        tcg_wasm_out_op(s, tcg_cond_to_inst[cond].i64);
+        break;
+    default:
+        g_assert_not_reached();
+    }
+}
+
+static void tcg_wasm_out_setcond(TCGContext *s, TCGType type, TCGReg ret,
+                                 TCGReg arg1, TCGReg arg2, TCGCond cond)
+{
+    tcg_wasm_out_cond(s, type, cond, arg1, arg2);
+    tcg_wasm_out_op(s, OPC_I64_EXTEND_I32_U);
+    tcg_wasm_out_op_idx(s, OPC_GLOBAL_SET, REG_IDX(ret));
+}
+
+static void tcg_wasm_out_negsetcond(TCGContext *s, TCGType type, TCGReg ret,
+                                    TCGReg arg1, TCGReg arg2, TCGCond cond)
+{
+    tcg_wasm_out_cond(s, type, cond, arg1, arg2);
+    tcg_wasm_out_op(s, OPC_I64_EXTEND_I32_U);
+    tcg_wasm_out_op_not(s);
+    tcg_wasm_out_op_const(s, OPC_I64_CONST, 1);
+    tcg_wasm_out_op(s, OPC_I64_ADD);
+    tcg_wasm_out_op_idx(s, OPC_GLOBAL_SET, REG_IDX(ret));
+}
+
+static void tcg_wasm_out_movcond(TCGContext *s, TCGType type, TCGReg ret,
+                                 TCGReg c1, TCGReg c2,
+                                 TCGReg v1, TCGReg v2,
+                                 TCGCond cond)
+{
+    tcg_wasm_out_cond(s, type, cond, c1, c2);
+    tcg_wasm_out_op_block(s, OPC_IF, BLOCK_I64);
+    tcg_wasm_out_op_idx(s, OPC_GLOBAL_GET, REG_IDX(v1));
+    tcg_wasm_out_op(s, OPC_ELSE);
+    tcg_wasm_out_op_idx(s, OPC_GLOBAL_GET, REG_IDX(v2));
+    tcg_wasm_out_op(s, OPC_END);
+    tcg_wasm_out_op_idx(s, OPC_GLOBAL_SET, REG_IDX(ret));
 }
 
 static bool patch_reloc(tcg_insn_unit *code_ptr_i, int type,
@@ -1147,13 +1296,20 @@ static const TCGOutOpUnary outop_not = {
     .out_rr = tgen_not,
 };
 
-static void tgen_setcond(TCGContext *s, TCGType type, TCGCond cond,
-                         TCGReg dest, TCGReg arg1, TCGReg arg2)
+static void tgen_setcond_tci(TCGContext *s, TCGType type, TCGCond cond,
+                             TCGReg dest, TCGReg arg1, TCGReg arg2)
 {
     TCGOpcode opc = (type == TCG_TYPE_I32
                      ? INDEX_op_tci_setcond32
                      : INDEX_op_setcond);
     tcg_out_op_rrrc(s, opc, dest, arg1, arg2, cond);
+}
+
+static void tgen_setcond(TCGContext *s, TCGType type, TCGCond cond,
+                         TCGReg dest, TCGReg arg1, TCGReg arg2)
+{
+    tgen_setcond_tci(s, type, cond, dest, arg1, arg2);
+    tcg_wasm_out_setcond(s, type, dest, arg1, arg2, cond);
 }
 
 static const TCGOutOpSetcond outop_setcond = {
@@ -1164,8 +1320,9 @@ static const TCGOutOpSetcond outop_setcond = {
 static void tgen_negsetcond(TCGContext *s, TCGType type, TCGCond cond,
                             TCGReg dest, TCGReg arg1, TCGReg arg2)
 {
-    tgen_setcond(s, type, cond, dest, arg1, arg2);
+    tgen_setcond_tci(s, type, cond, dest, arg1, arg2);
     tgen_neg(s, type, dest, dest);
+    tcg_wasm_out_negsetcond(s, type, dest, arg1, arg2, cond);
 }
 
 static const TCGOutOpSetcond outop_negsetcond = {
@@ -1176,7 +1333,7 @@ static const TCGOutOpSetcond outop_negsetcond = {
 static void tgen_brcond(TCGContext *s, TCGType type, TCGCond cond,
                         TCGReg arg0, TCGReg arg1, TCGLabel *l)
 {
-    tgen_setcond(s, type, cond, TCG_REG_TMP, arg0, arg1);
+    tgen_setcond_tci(s, type, cond, TCG_REG_TMP, arg0, arg1);
     tcg_out_op_rl(s, INDEX_op_brcond, TCG_REG_TMP, l);
 }
 
@@ -1193,6 +1350,7 @@ static void tgen_movcond(TCGContext *s, TCGType type, TCGCond cond,
                      ? INDEX_op_tci_movcond32
                      : INDEX_op_movcond);
     tcg_out_op_rrrrrc(s, opc, ret, c1, c2, vt, vf, cond);
+    tcg_wasm_out_movcond(s, type, ret, c1, c2, vt, vf, cond);
 }
 
 static const TCGOutOpMovcond outop_movcond = {
