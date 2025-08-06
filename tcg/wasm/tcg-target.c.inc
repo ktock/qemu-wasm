@@ -131,6 +131,9 @@ static const uint8_t tcg_target_reg_index[TCG_TARGET_NB_REGS] = {
 #define TMP32_LOCAL_0_IDX 1
 #define TMP64_LOCAL_0_IDX 2
 
+/* Function index */
+#define HELPER_IDX_START 0 /* The first index of helper functions */
+
 typedef enum {
     OPC_UNREACHABLE = 0x00,
     OPC_LOOP = 0x03,
@@ -139,6 +142,7 @@ typedef enum {
     OPC_END = 0x0b,
     OPC_BR = 0x0c,
     OPC_RETURN = 0x0f,
+    OPC_CALL = 0x10,
     OPC_LOCAL_GET = 0x20,
     OPC_LOCAL_SET = 0x21,
     OPC_GLOBAL_GET = 0x23,
@@ -1010,6 +1014,147 @@ static void tcg_wasm_out_goto_tb(
     tcg_wasm_out_op(s, OPC_END);
 }
 
+static void push_arg_i64(TCGContext *s, int *stack_offset)
+{
+    intptr_t ofs;
+    tcg_wasm_out_op_idx(s, OPC_GLOBAL_GET, REG_IDX(TCG_REG_CALL_STACK));
+    ofs = tcg_wasm_out_norm_ptr(s, *stack_offset);
+    tcg_wasm_out_op_ldst(s, OPC_I64_LOAD, 0, ofs);
+    *stack_offset = *stack_offset + 8;
+}
+
+static void gen_call(TCGContext *s,
+                     const TCGHelperInfo *info, uint32_t func_idx)
+{
+    unsigned typemask = info->typemask;
+    int rettype = typemask & 7;
+    int stack_offset = 0;
+    intptr_t ofs;
+
+    if (rettype ==  dh_typecode_i128) {
+        /* receive 128bit return value via the buffer */
+        ofs = tcg_wasm_out_get_ctx(s, CTX_OFFSET(buf128));
+        tcg_wasm_out_op_ldst(s, OPC_I64_LOAD, 0, ofs);
+    }
+
+    for (typemask >>= 3; typemask; typemask >>= 3) {
+        switch (typemask & 7) {
+        case dh_typecode_void:
+            break;
+        case dh_typecode_i32:
+        case dh_typecode_s32:
+            push_arg_i64(s, &stack_offset);
+            tcg_wasm_out_op(s, OPC_I32_WRAP_I64);
+            break;
+        case dh_typecode_i64:
+        case dh_typecode_s64:
+            push_arg_i64(s, &stack_offset);
+            break;
+        case dh_typecode_i128:
+            tcg_wasm_out_op_idx(s, OPC_GLOBAL_GET, REG_IDX(TCG_REG_CALL_STACK));
+            tcg_wasm_out_op_const(s, OPC_I64_CONST, stack_offset);
+            tcg_wasm_out_op(s, OPC_I64_ADD);
+            stack_offset += 16;
+            break;
+        case dh_typecode_ptr:
+            push_arg_i64(s, &stack_offset);
+            break;
+        default:
+            g_assert_not_reached();
+        }
+    }
+
+    tcg_wasm_out_op_idx(s, OPC_CALL, func_idx);
+
+    switch (rettype) {
+    case dh_typecode_void:
+        break;
+    case dh_typecode_i32:
+    case dh_typecode_s32:
+        tcg_wasm_out_op(s, OPC_I64_EXTEND_I32_S);
+        tcg_wasm_out_op_idx(s, OPC_GLOBAL_SET, REG_IDX(TCG_REG_R0));
+        break;
+    case dh_typecode_i64:
+    case dh_typecode_s64:
+        tcg_wasm_out_op_idx(s, OPC_GLOBAL_SET, REG_IDX(TCG_REG_R0));
+        break;
+    case dh_typecode_i128:
+        ofs = tcg_wasm_out_get_ctx(s, CTX_OFFSET(buf128));
+        tcg_wasm_out_op_ldst(s, OPC_I64_LOAD, 0, ofs);
+        ofs = tcg_wasm_out_norm_ptr(s, 0);
+        tcg_wasm_out_op_ldst(s, OPC_I64_LOAD, 0, ofs);
+        tcg_wasm_out_op_idx(s, OPC_GLOBAL_SET, REG_IDX(TCG_REG_R0));
+        ofs = tcg_wasm_out_get_ctx(s, CTX_OFFSET(buf128));
+        tcg_wasm_out_op_ldst(s, OPC_I64_LOAD, 0, ofs);
+        ofs = tcg_wasm_out_norm_ptr(s, 8);
+        tcg_wasm_out_op_ldst(s, OPC_I64_LOAD, 0, ofs);
+        tcg_wasm_out_op_idx(s, OPC_GLOBAL_SET, REG_IDX(TCG_REG_R1));
+        break;
+    case dh_typecode_ptr:
+        tcg_wasm_out_op_idx(s, OPC_GLOBAL_SET, REG_IDX(TCG_REG_R0));
+        break;
+    default:
+        g_assert_not_reached();
+    }
+}
+
+typedef struct HelperInfo {
+    intptr_t idx_on_qemu;
+    QSIMPLEQ_ENTRY(HelperInfo) entry;
+} HelperInfo;
+
+static __thread QSIMPLEQ_HEAD(, HelperInfo) helpers;
+__thread uint32_t helper_idx;
+
+static void init_helpers(void)
+{
+    QSIMPLEQ_INIT(&helpers);
+    helper_idx = HELPER_IDX_START;
+}
+
+static uint32_t register_helper(TCGContext *s, intptr_t helper_idx_on_qemu)
+{
+    tcg_debug_assert(helper_idx_on_qemu >= 0);
+
+    HelperInfo *e = tcg_malloc(sizeof(HelperInfo));
+    e->idx_on_qemu = helper_idx_on_qemu;
+    QSIMPLEQ_INSERT_TAIL(&helpers, e, entry);
+
+    return helper_idx++;
+}
+
+static int64_t get_helper_idx(TCGContext *s, intptr_t helper_idx_on_qemu)
+{
+    uint32_t idx = HELPER_IDX_START;
+    HelperInfo *e;
+
+    QSIMPLEQ_FOREACH(e, &helpers, entry) {
+        if (e->idx_on_qemu == helper_idx_on_qemu) {
+            return idx;
+        }
+        idx++;
+    }
+    return -1;
+}
+
+static void tcg_wasm_out_call(TCGContext *s, intptr_t func,
+                              const TCGHelperInfo *info)
+{
+    intptr_t ofs;
+    int64_t func_idx = get_helper_idx(s, func);
+    if (func_idx < 0) {
+        func_idx = register_helper(s, func);
+    }
+
+    ofs = tcg_wasm_out_get_ctx(s, CTX_OFFSET(tci_tb_ptr));
+    tcg_wasm_out_op_ldst(s, OPC_I64_LOAD, 0, ofs);
+    ofs = tcg_wasm_out_norm_ptr(s, 0);
+    tcg_wasm_out_op_const(s, OPC_I64_CONST, (uint64_t)s->code_ptr);
+    tcg_wasm_out_op_ldst(s, OPC_I64_STORE, 0, ofs);
+
+    gen_call(s, info, func_idx);
+}
+
 static bool patch_reloc(tcg_insn_unit *code_ptr_i, int type,
                         intptr_t value, intptr_t addend)
 {
@@ -1420,6 +1565,7 @@ static void tcg_out_call(TCGContext *s, const tcg_insn_unit *func,
     insn = deposit32(insn, 0, 8, INDEX_op_call);
     insn = deposit32(insn, 8, 4, which);
     tcg_out32(s, insn);
+    tcg_wasm_out_call(s, (intptr_t)func, info);
 }
 
 static void tcg_out_exit_tb(TCGContext *s, uintptr_t arg)
@@ -2268,6 +2414,7 @@ static void tcg_out_tb_start(TCGContext *s)
     init_sub_buf();
     init_blocks();
     init_label_info();
+    init_helpers();
 
     tcg_wasm_out_op_block(s, OPC_LOOP, BLOCK_NORET);
     tcg_wasm_out_op_idx(s, OPC_GLOBAL_GET, BLOCK_IDX);
