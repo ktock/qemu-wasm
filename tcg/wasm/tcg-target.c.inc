@@ -116,14 +116,22 @@ static const uint8_t tcg_target_reg_index[TCG_TARGET_NB_REGS] = {
 
 #define REG_IDX(r) tcg_target_reg_index[r]
 
+/*
+ * Global variable used for storing the current block index
+ */
+#define BLOCK_IDX 16
+
 /* Temporary local variables */
 #define TMP32_LOCAL_0_IDX 0
 #define TMP64_LOCAL_0_IDX 1
 
 typedef enum {
+    OPC_UNREACHABLE = 0x00,
+    OPC_LOOP = 0x03,
     OPC_IF = 0x04,
     OPC_ELSE = 0x05,
     OPC_END = 0x0b,
+    OPC_BR = 0x0c,
     OPC_LOCAL_GET = 0x20,
     OPC_LOCAL_SET = 0x21,
     OPC_GLOBAL_GET = 0x23,
@@ -268,6 +276,17 @@ static void linked_buf_out_sleb128(LinkedBuf *p, int64_t v)
     }
 }
 
+static int linked_buf_len(LinkedBuf *p)
+{
+    int total = 0;
+    LinkedBufEntry *e;
+
+    QSIMPLEQ_FOREACH(e, p, entry) {
+        total += e->size;
+    }
+    return total;
+}
+
 /*
  * wasm code is generataed in the dynamically allocated buffer which
  * are managed as a linked list.
@@ -277,6 +296,10 @@ static __thread LinkedBuf sub_buf;
 static void init_sub_buf(void)
 {
     QSIMPLEQ_INIT(&sub_buf);
+}
+static int sub_buf_len(void)
+{
+    return linked_buf_len(&sub_buf);
 }
 static void tcg_wasm_out8(TCGContext *s, uint8_t v)
 {
@@ -784,6 +807,125 @@ static void tcg_wasm_out_movi(TCGContext *s, TCGType type,
        g_assert_not_reached();
    }
    tcg_wasm_out_op_idx(s, OPC_GLOBAL_SET, REG_IDX(ret));
+}
+
+typedef struct LabelInfo {
+    int label;
+    int block;
+    QSIMPLEQ_ENTRY(LabelInfo) entry;
+} LabelInfo;
+
+static __thread QSIMPLEQ_HEAD(, LabelInfo) label_info;
+
+static void init_label_info(void)
+{
+    QSIMPLEQ_INIT(&label_info);
+}
+
+static void add_label(int label, int block)
+{
+    LabelInfo *e = tcg_malloc(sizeof(LabelInfo));
+    e->label = label;
+    e->block = block;
+    QSIMPLEQ_INSERT_TAIL(&label_info, e, entry);
+}
+
+typedef struct BlockPlaceholder {
+    int label;
+    int pos;
+    QSIMPLEQ_ENTRY(BlockPlaceholder) entry;
+} BlockPlaceholder;
+
+static __thread QSIMPLEQ_HEAD(, BlockPlaceholder) block_placeholder;
+static __thread int64_t cur_block_idx;
+
+static void init_blocks(void)
+{
+    QSIMPLEQ_INIT(&block_placeholder);
+    cur_block_idx = 0;
+}
+
+static void add_block_placeholder(int label, int pos)
+{
+    BlockPlaceholder *e = tcg_malloc(sizeof(BlockPlaceholder));
+    e->label = label;
+    e->pos = pos;
+    QSIMPLEQ_INSERT_TAIL(&block_placeholder, e, entry);
+}
+
+static int get_block_of_label(int label)
+{
+    LabelInfo *e;
+    QSIMPLEQ_FOREACH(e, &label_info, entry) {
+        if (e->label == label) {
+            return e->block;
+        }
+    }
+    return -1;
+}
+
+static void tcg_wasm_out_new_block(TCGContext *s)
+{
+    tcg_wasm_out_op(s, OPC_END); /* close this block */
+
+    /* next block */
+    tcg_wasm_out_op_idx(s, OPC_GLOBAL_GET, BLOCK_IDX);
+    tcg_wasm_out_op_const(s, OPC_I64_CONST, ++cur_block_idx);
+    tcg_wasm_out_op(s, OPC_I64_LE_U);
+    tcg_wasm_out_op_block(s, OPC_IF, BLOCK_NORET);
+}
+
+static void tcg_out_label_cb(TCGContext *s, TCGLabel *l)
+{
+    add_label(l->id, cur_block_idx + 1);
+    tcg_wasm_out_new_block(s);
+}
+
+static void tcg_wasm_out_br_to_label(TCGContext *s, TCGLabel *l, bool br_if)
+{
+    int toploop_depth = 1;
+    if (br_if) {
+        tcg_wasm_out_op_block(s, OPC_IF, BLOCK_NORET);
+        toploop_depth++;
+    }
+    tcg_wasm_out8(s, OPC_I64_CONST);
+
+    add_block_placeholder(l->id, sub_buf_len());
+
+    tcg_wasm_out8(s, 0x80); /* placeholder for the target block idx */
+    tcg_wasm_out8(s, 0x80);
+    tcg_wasm_out8(s, 0x80);
+    tcg_wasm_out8(s, 0x80);
+    tcg_wasm_out8(s, 0x00);
+    tcg_wasm_out_op_idx(s, OPC_GLOBAL_SET, BLOCK_IDX);
+    if (get_block_of_label(l->id) != -1) {
+        /*
+         * The label is placed before this br, branch to the top of loop
+         */
+        tcg_wasm_out_op_idx(s, OPC_BR, toploop_depth);
+    } else {
+        /*
+         * The label will be generated after this br,
+         * branch to the end of the current block
+         */
+        tcg_wasm_out_op_idx(s, OPC_BR, toploop_depth - 1);
+    }
+    if (br_if) {
+        tcg_wasm_out_op(s, OPC_END);
+    }
+}
+
+static void tcg_wasm_out_br(TCGContext *s, TCGLabel *l)
+{
+    tcg_wasm_out_br_to_label(s, l, false);
+}
+
+static void tcg_wasm_out_brcond(TCGContext *s, TCGType type,
+                                TCGReg arg1, TCGReg arg2,
+                                TCGCond cond, TCGLabel *l)
+{
+    tcg_wasm_out_cond(s, type, cond, arg1, arg2);
+    tcg_wasm_out_br_to_label(s, l, true);
 }
 
 static bool patch_reloc(tcg_insn_unit *code_ptr_i, int type,
@@ -1804,6 +1946,7 @@ static void tgen_brcond(TCGContext *s, TCGType type, TCGCond cond,
 {
     tgen_setcond_tci(s, type, cond, TCG_REG_TMP, arg0, arg1);
     tcg_out_op_rl(s, INDEX_op_brcond, TCG_REG_TMP, l);
+    tcg_wasm_out_brcond(s, type, arg0, arg1, cond, l);
 }
 
 static const TCGOutOpBrcond outop_brcond = {
@@ -1835,6 +1978,7 @@ static void tcg_out_mb(TCGContext *s, unsigned a0)
 static void tcg_out_br(TCGContext *s, TCGLabel *l)
 {
     tcg_out_op_l(s, INDEX_op_br, l);
+    tcg_wasm_out_br(s, l);
 }
 
 static void tgen_ld8u(TCGContext *s, TCGType type, TCGReg dest,
@@ -2037,6 +2181,23 @@ static inline void tcg_target_qemu_prologue(TCGContext *s)
 static void tcg_out_tb_start(TCGContext *s)
 {
     init_sub_buf();
+    init_blocks();
+    init_label_info();
+
+    tcg_wasm_out_op_block(s, OPC_LOOP, BLOCK_NORET);
+    tcg_wasm_out_op_idx(s, OPC_GLOBAL_GET, BLOCK_IDX);
+    tcg_wasm_out_op(s, OPC_I64_EQZ);
+    tcg_wasm_out_op_block(s, OPC_IF, BLOCK_NORET);
+}
+
+static int tcg_out_tb_end(TCGContext *s)
+{
+    tcg_wasm_out_op(s, OPC_END); /* end if */
+    tcg_wasm_out_op(s, OPC_END); /* end loop */
+    tcg_wasm_out_op(s, OPC_UNREACHABLE);
+    tcg_wasm_out_op(s, OPC_END); /* end func */
+
+    return 0;
 }
 
 bool tcg_target_has_memory_bswap(MemOp memop)
