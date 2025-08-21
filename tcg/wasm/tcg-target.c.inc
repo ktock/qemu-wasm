@@ -182,7 +182,10 @@ typedef enum {
     OPC_I64_SHR_U = 0x88,
 
     OPC_I32_WRAP_I64 = 0xa7,
+    OPC_I64_EXTEND_I32_S = 0xac,
     OPC_I64_EXTEND_I32_U = 0xad,
+    OPC_I64_EXTEND8_S = 0xc2,
+    OPC_I64_EXTEND16_S = 0xc3,
 } WasmInsn;
 
 typedef enum {
@@ -391,6 +394,33 @@ static void tcg_wasm_out_movcond(TCGContext *s, TCGType type, TCGReg ret,
     tcg_wasm_out_op_idx(s, OPC_GLOBAL_SET, REG_IDX(ret));
 }
 
+static void tcg_wasm_out_sextract(TCGContext *s, TCGReg dest, TCGReg arg1,
+                                  int pos, int len)
+{
+    tcg_wasm_out_op_idx(s, OPC_GLOBAL_GET, REG_IDX(arg1));
+
+    if (pos == 0) {
+        switch (len) {
+        case 8:
+            tcg_wasm_out_op(s, OPC_I64_EXTEND8_S);
+            break;
+        case 16:
+            tcg_wasm_out_op(s, OPC_I64_EXTEND16_S);
+            break;
+        case 32:
+            tcg_wasm_out_op(s, OPC_I32_WRAP_I64);
+            tcg_wasm_out_op(s, OPC_I64_EXTEND_I32_S);
+            break;
+        default:
+            g_assert_not_reached();
+        }
+    } else {
+        g_assert_not_reached();
+    }
+
+    tcg_wasm_out_op_idx(s, OPC_GLOBAL_SET, REG_IDX(dest));
+}
+
 static void tcg_out_op_rr(TCGContext *s, TCGOpcode op, TCGReg r0, TCGReg r1)
 {
     tcg_insn_unit_tci insn = 0;
@@ -527,6 +557,18 @@ static void tgen_mul(TCGContext *s, TCGType type,
 static const TCGOutOpBinary outop_mul = {
     .base.static_constraint = C_O1_I2(r, r, r),
     .out_rrr = tgen_mul,
+};
+
+static void tcg_out_sextract(TCGContext *s, TCGType type, TCGReg rd,
+                             TCGReg rs, unsigned pos, unsigned len)
+{
+    tcg_out_op_rrbb(s, INDEX_op_sextract, rd, rs, pos, len);
+    tcg_wasm_out_sextract(s, rd, rs, pos, len);
+}
+
+static const TCGOutOpExtract outop_sextract = {
+    .base.static_constraint = C_O1_I1(r, r),
+    .out_rr = tcg_out_sextract,
 };
 
 static void tgen_shl(TCGContext *s, TCGType type,
