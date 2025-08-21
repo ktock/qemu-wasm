@@ -21,6 +21,12 @@
 #include "qemu/osdep.h"
 #include "tcg/tcg.h"
 
+static void tci_args_rr(uint32_t insn, TCGReg *r0, TCGReg *r1)
+{
+    *r0 = extract32(insn, 8, 4);
+    *r1 = extract32(insn, 12, 4);
+}
+
 static void tci_args_rrr(uint32_t insn, TCGReg *r0, TCGReg *r1, TCGReg *r2)
 {
     *r0 = extract32(insn, 8, 4);
@@ -37,6 +43,110 @@ static void tci_args_rrbb(uint32_t insn, TCGReg *r0, TCGReg *r1,
     *i3 = extract32(insn, 22, 6);
 }
 
+static void tci_args_rrrc(uint32_t insn,
+                          TCGReg *r0, TCGReg *r1, TCGReg *r2, TCGCond *c3)
+{
+    *r0 = extract32(insn, 8, 4);
+    *r1 = extract32(insn, 12, 4);
+    *r2 = extract32(insn, 16, 4);
+    *c3 = extract32(insn, 20, 4);
+}
+
+static void tci_args_rrrrrc(uint32_t insn, TCGReg *r0, TCGReg *r1,
+                            TCGReg *r2, TCGReg *r3, TCGReg *r4, TCGCond *c5)
+{
+    *r0 = extract32(insn, 8, 4);
+    *r1 = extract32(insn, 12, 4);
+    *r2 = extract32(insn, 16, 4);
+    *r3 = extract32(insn, 20, 4);
+    *r4 = extract32(insn, 24, 4);
+    *c5 = extract32(insn, 28, 4);
+}
+
+static bool tci_compare32(uint32_t u0, uint32_t u1, TCGCond condition)
+{
+    bool result = false;
+    int32_t i0 = u0;
+    int32_t i1 = u1;
+    switch (condition) {
+    case TCG_COND_EQ:
+        result = (u0 == u1);
+        break;
+    case TCG_COND_NE:
+        result = (u0 != u1);
+        break;
+    case TCG_COND_LT:
+        result = (i0 < i1);
+        break;
+    case TCG_COND_GE:
+        result = (i0 >= i1);
+        break;
+    case TCG_COND_LE:
+        result = (i0 <= i1);
+        break;
+    case TCG_COND_GT:
+        result = (i0 > i1);
+        break;
+    case TCG_COND_LTU:
+        result = (u0 < u1);
+        break;
+    case TCG_COND_GEU:
+        result = (u0 >= u1);
+        break;
+    case TCG_COND_LEU:
+        result = (u0 <= u1);
+        break;
+    case TCG_COND_GTU:
+        result = (u0 > u1);
+        break;
+    default:
+        g_assert_not_reached();
+    }
+    return result;
+}
+
+static bool tci_compare64(uint64_t u0, uint64_t u1, TCGCond condition)
+{
+    bool result = false;
+    int64_t i0 = u0;
+    int64_t i1 = u1;
+    switch (condition) {
+    case TCG_COND_EQ:
+        result = (u0 == u1);
+        break;
+    case TCG_COND_NE:
+        result = (u0 != u1);
+        break;
+    case TCG_COND_LT:
+        result = (i0 < i1);
+        break;
+    case TCG_COND_GE:
+        result = (i0 >= i1);
+        break;
+    case TCG_COND_LE:
+        result = (i0 <= i1);
+        break;
+    case TCG_COND_GT:
+        result = (i0 > i1);
+        break;
+    case TCG_COND_LTU:
+        result = (u0 < u1);
+        break;
+    case TCG_COND_GEU:
+        result = (u0 >= u1);
+        break;
+    case TCG_COND_LEU:
+        result = (u0 <= u1);
+        break;
+    case TCG_COND_GTU:
+        result = (u0 > u1);
+        break;
+    default:
+        g_assert_not_reached();
+    }
+    return result;
+}
+
 static uintptr_t tcg_qemu_tb_exec_tci(CPUArchState *env, const void *v_tb_ptr)
 {
     const uint32_t *tb_ptr = v_tb_ptr;
@@ -50,8 +160,10 @@ static uintptr_t tcg_qemu_tb_exec_tci(CPUArchState *env, const void *v_tb_ptr)
     for (;;) {
         uint32_t insn;
         TCGOpcode opc;
-        TCGReg r0, r1, r2;
+        TCGReg r0, r1, r2, r3, r4;
         uint8_t pos, len;
+        TCGCond condition;
+        uint32_t tmp32;
 
         insn = *tb_ptr++;
         opc = extract32(insn, 0, 8);
@@ -101,6 +213,28 @@ static uintptr_t tcg_qemu_tb_exec_tci(CPUArchState *env, const void *v_tb_ptr)
             tci_args_rrr(insn, &r0, &r1, &r2);
             regs[r0] = ((tcg_target_long)regs[r1]
                         >> (regs[r2] % TCG_TARGET_REG_BITS));
+            break;
+        case INDEX_op_neg:
+            tci_args_rr(insn, &r0, &r1);
+            regs[r0] = -regs[r1];
+            break;
+        case INDEX_op_setcond:
+            tci_args_rrrc(insn, &r0, &r1, &r2, &condition);
+            regs[r0] = tci_compare64(regs[r1], regs[r2], condition);
+            break;
+        case INDEX_op_movcond:
+            tci_args_rrrrrc(insn, &r0, &r1, &r2, &r3, &r4, &condition);
+            tmp32 = tci_compare64(regs[r1], regs[r2], condition);
+            regs[r0] = regs[tmp32 ? r3 : r4];
+            break;
+        case INDEX_op_tci_setcond32:
+            tci_args_rrrc(insn, &r0, &r1, &r2, &condition);
+            regs[r0] = tci_compare32(regs[r1], regs[r2], condition);
+            break;
+        case INDEX_op_tci_movcond32:
+            tci_args_rrrrrc(insn, &r0, &r1, &r2, &r3, &r4, &condition);
+            tmp32 = tci_compare32(regs[r1], regs[r2], condition);
+            regs[r0] = regs[tmp32 ? r3 : r4];
             break;
         default:
             g_assert_not_reached();
