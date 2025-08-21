@@ -20,6 +20,14 @@
 
 #include "qemu/osdep.h"
 #include "tcg/tcg.h"
+#include "tcg/tcg-ldst.h"
+
+static void tci_args_rl(uint32_t insn, const void *tb_ptr,
+                        TCGReg *r0, void **l1)
+{
+    *r0 = extract32(insn, 8, 4);
+    *l1 = sextract32(insn, 12, 20) + (void *)tb_ptr;
+}
 
 static void tci_args_rr(uint32_t insn, TCGReg *r0, TCGReg *r1)
 {
@@ -27,11 +35,24 @@ static void tci_args_rr(uint32_t insn, TCGReg *r0, TCGReg *r1)
     *r1 = extract32(insn, 12, 4);
 }
 
+static void tci_args_ri(uint32_t insn, TCGReg *r0, tcg_target_ulong *i1)
+{
+    *r0 = extract32(insn, 8, 4);
+    *i1 = sextract32(insn, 12, 20);
+}
+
 static void tci_args_rrr(uint32_t insn, TCGReg *r0, TCGReg *r1, TCGReg *r2)
 {
     *r0 = extract32(insn, 8, 4);
     *r1 = extract32(insn, 12, 4);
     *r2 = extract32(insn, 16, 4);
+}
+
+static void tci_args_rrs(uint32_t insn, TCGReg *r0, TCGReg *r1, int32_t *i2)
+{
+    *r0 = extract32(insn, 8, 4);
+    *r1 = extract32(insn, 12, 4);
+    *i2 = sextract32(insn, 16, 16);
 }
 
 static void tci_args_rrbb(uint32_t insn, TCGReg *r0, TCGReg *r1,
@@ -161,9 +182,12 @@ static uintptr_t tcg_qemu_tb_exec_tci(CPUArchState *env, const void *v_tb_ptr)
         uint32_t insn;
         TCGOpcode opc;
         TCGReg r0, r1, r2, r3, r4;
+        tcg_target_ulong t1;
         uint8_t pos, len;
         TCGCond condition;
         uint32_t tmp32;
+        int32_t ofs;
+        void *ptr;
 
         insn = *tb_ptr++;
         opc = extract32(insn, 0, 8);
@@ -235,6 +259,69 @@ static uintptr_t tcg_qemu_tb_exec_tci(CPUArchState *env, const void *v_tb_ptr)
             tci_args_rrrrrc(insn, &r0, &r1, &r2, &r3, &r4, &condition);
             tmp32 = tci_compare32(regs[r1], regs[r2], condition);
             regs[r0] = regs[tmp32 ? r3 : r4];
+            break;
+        case INDEX_op_tci_movi:
+            tci_args_ri(insn, &r0, &t1);
+            regs[r0] = t1;
+            break;
+        case INDEX_op_tci_movl:
+            tci_args_rl(insn, tb_ptr, &r0, &ptr);
+            regs[r0] = *(tcg_target_ulong *)ptr;
+            break;
+        case INDEX_op_ld:
+            tci_args_rrs(insn, &r0, &r1, &ofs);
+            ptr = (void *)(regs[r1] + ofs);
+            regs[r0] = *(tcg_target_ulong *)ptr;
+            break;
+        case INDEX_op_ld8u:
+            tci_args_rrs(insn, &r0, &r1, &ofs);
+            ptr = (void *)(regs[r1] + ofs);
+            regs[r0] = *(uint8_t *)ptr;
+            break;
+        case INDEX_op_ld8s:
+            tci_args_rrs(insn, &r0, &r1, &ofs);
+            ptr = (void *)(regs[r1] + ofs);
+            regs[r0] = *(int8_t *)ptr;
+            break;
+        case INDEX_op_ld16u:
+            tci_args_rrs(insn, &r0, &r1, &ofs);
+            ptr = (void *)(regs[r1] + ofs);
+            regs[r0] = *(uint16_t *)ptr;
+            break;
+        case INDEX_op_ld16s:
+            tci_args_rrs(insn, &r0, &r1, &ofs);
+            ptr = (void *)(regs[r1] + ofs);
+            regs[r0] = *(int16_t *)ptr;
+            break;
+        case INDEX_op_st:
+            tci_args_rrs(insn, &r0, &r1, &ofs);
+            ptr = (void *)(regs[r1] + ofs);
+            *(tcg_target_ulong *)ptr = regs[r0];
+            break;
+        case INDEX_op_st8:
+            tci_args_rrs(insn, &r0, &r1, &ofs);
+            ptr = (void *)(regs[r1] + ofs);
+            *(uint8_t *)ptr = regs[r0];
+            break;
+        case INDEX_op_st16:
+            tci_args_rrs(insn, &r0, &r1, &ofs);
+            ptr = (void *)(regs[r1] + ofs);
+            *(uint16_t *)ptr = regs[r0];
+            break;
+        case INDEX_op_ld32u:
+            tci_args_rrs(insn, &r0, &r1, &ofs);
+            ptr = (void *)(regs[r1] + ofs);
+            regs[r0] = *(uint32_t *)ptr;
+            break;
+        case INDEX_op_ld32s:
+            tci_args_rrs(insn, &r0, &r1, &ofs);
+            ptr = (void *)(regs[r1] + ofs);
+            regs[r0] = *(int32_t *)ptr;
+            break;
+        case INDEX_op_st32:
+            tci_args_rrs(insn, &r0, &r1, &ofs);
+            ptr = (void *)(regs[r1] + ofs);
+            *(uint32_t *)ptr = regs[r0];
             break;
         default:
             g_assert_not_reached();

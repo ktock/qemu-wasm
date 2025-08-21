@@ -243,7 +243,9 @@ for opt do
   ;;
   --without-default-features) default_feature="no"
   ;;
-  --wasm64-32bit-address-limit) wasm64_memory64="2"
+  --enable-wasm64-32bit-address-limit) wasm64_memory64="2"
+  ;;
+  --disable-wasm64-32bit-address-limit) wasm64_memory64="1"
   ;;
   esac
 done
@@ -801,8 +803,6 @@ for opt do
   ;;
   --disable-rust) rust=disabled
   ;;
-  --wasm64-32bit-address-limit)
-  ;;
   # everything else has the same name in configure and meson
   --*) meson_option_parse "$opt" "$optarg"
   ;;
@@ -928,8 +928,6 @@ Advanced options (experts only):
   --disable-containers     don't use containers for cross-building
   --container-engine=TYPE  which container engine to use [$container_engine]
   --gdb=GDB-path           gdb to use for gdbstub tests [$gdb_bin]
-  --wasm64-32bit-address-limit Restrict wasm64 address space to 32-bit (default
-                               is to use the whole 64-bit range).
 EOF
   meson_options_help
 cat << EOF
