@@ -1116,6 +1116,11 @@ static void tcg_out_op_r(TCGContext *s, TCGOpcode op, TCGReg r0)
     tcg_out32(s, insn);
 }
 
+static void tcg_out_op_v(TCGContext *s, TCGOpcode op)
+{
+    tcg_out32(s, (uint8_t)op);
+}
+
 static void tcg_out_op_ri(TCGContext *s, TCGOpcode op, TCGReg r0, int32_t i1)
 {
     tcg_insn_unit_tci insn = 0;
@@ -1929,6 +1934,20 @@ static bool tcg_out_qemu_ld_slow_path(TCGContext *s, TCGLabelQemuLdst *l)
 static bool tcg_out_qemu_st_slow_path(TCGContext *s, TCGLabelQemuLdst *l)
 {
     g_assert_not_reached();
+}
+
+static void tcg_out_mb(TCGContext *s, unsigned a0)
+{
+    tcg_out_op_v(s, INDEX_op_mb);
+
+    /*
+     * Wasm's threading proposal provides atomic.fence instruction as the fence
+     * operator.
+     * https://webassembly.github.io/threads/core/syntax/instructions.html#atomic-memory-instructions
+     */
+    tcg_wasm_out8(s, 0xfe);
+    tcg_wasm_out8(s, 0x03);
+    tcg_wasm_out8(s, 0x00);
 }
 
 static void tcg_out_tb_start(TCGContext *s)
