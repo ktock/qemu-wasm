@@ -24,6 +24,10 @@
 #include "tcg/helper-info.h"
 #include <ffi.h>
 #include <emscripten.h>
+#include "wasm.h"
+
+/* TBs executed more than this value will be compiled to wasm */
+#define INSTANTIATE_NUM 1500
 
 #define EM_JS_PRE(ret, name, args, body...) EM_JS(ret, name, args, body)
 
@@ -60,6 +64,8 @@ EM_JS_PRE(void*, instantiate_wasm, (void *wasm_begin,
             },
             "helper" : helper,
     });
+
+    Module.__wasm_tb.inst_gc_registry.register(inst, "tbinstance");
 
     return ENC_PTR(addFunction(inst.exports.start, 'ii'));
 });
@@ -288,9 +294,53 @@ static void tci_qemu_st(CPUArchState *env, uint64_t taddr, uint64_t val,
     }
 }
 
-static uintptr_t tcg_qemu_tb_exec_tci(CPUArchState *env, const void *v_tb_ptr)
+static __thread int thread_idx;
+
+static inline int32_t get_counter_local(void *tb_ptr)
 {
-    const uint32_t *tb_ptr = v_tb_ptr;
+    return get_counter(tb_ptr, thread_idx);
+}
+
+static inline void set_counter_local(void *tb_ptr, int v)
+{
+    set_counter(tb_ptr, thread_idx, v);
+}
+
+static inline struct WasmInstanceInfo *get_info_local(void *tb_ptr)
+{
+    return get_info(tb_ptr, thread_idx);
+}
+
+static inline void set_info_local(void *tb_ptr, struct WasmInstanceInfo *info)
+{
+    set_info(tb_ptr, thread_idx, info);
+}
+
+/*
+ * inc_counter increments the execution counter in the specified TB.
+ * If the counter reaches the limit, it returns true otherwise returns false.
+ */
+static inline bool inc_counter(void *tb_ptr)
+{
+    int32_t counter = get_counter_local(tb_ptr);
+    if ((counter >= 0) && (counter < INSTANTIATE_NUM)) {
+        set_counter_local(tb_ptr, counter + 1);
+    } else {
+        return true; /* enter to wasm TB */
+    }
+    return false;
+}
+
+static __thread struct WasmContext ctx = {
+    .tb_ptr = 0,
+    .stack = NULL,
+    .do_init = 1,
+    .buf128 = NULL,
+};
+
+static uintptr_t tcg_qemu_tb_exec_tci(CPUArchState *env)
+{
+    uint32_t *tb_ptr = get_tci_ptr(ctx.tb_ptr);
     tcg_target_ulong regs[TCG_TARGET_NB_REGS];
     uint64_t stack[(TCG_STATIC_CALL_ARGS_SIZE + TCG_STATIC_FRAME_SIZE)
                    / sizeof(uint64_t)];
@@ -583,18 +633,32 @@ static uintptr_t tcg_qemu_tb_exec_tci(CPUArchState *env, const void *v_tb_ptr)
             break;
         case INDEX_op_exit_tb:
             tci_args_l(insn, tb_ptr, &ptr);
+            ctx.tb_ptr = 0;
             return (uintptr_t)ptr;
         case INDEX_op_goto_tb:
             tci_args_l(insn, tb_ptr, &ptr);
-            tb_ptr = *(void **)ptr;
+            if (tb_ptr != *(void **)ptr) {
+                tb_ptr = *(void **)ptr;
+                ctx.tb_ptr = tb_ptr;
+                if (inc_counter(tb_ptr)) {
+                    return 0; /* enter to wasm TB */
+                }
+                tb_ptr = get_tci_ptr(tb_ptr);
+            }
             break;
         case INDEX_op_goto_ptr:
             tci_args_r(insn, &r0);
             ptr = (void *)regs[r0];
             if (!ptr) {
+                ctx.tb_ptr = 0;
                 return 0;
             }
             tb_ptr = ptr;
+            ctx.tb_ptr = tb_ptr;
+            if (inc_counter(tb_ptr)) {
+                return 0; /* enter to wasm TB */
+            }
+            tb_ptr = get_tci_ptr(tb_ptr);
             break;
         case INDEX_op_qemu_ld:
             tci_args_rrm(insn, &r0, &r1, &oi);
@@ -612,6 +676,180 @@ static uintptr_t tcg_qemu_tb_exec_tci(CPUArchState *env, const void *v_tb_ptr)
             break;
         default:
             g_assert_not_reached();
+        }
+    }
+}
+
+/*
+ * The maximum number of instances that can exist simultaneously
+ *
+ * If this limit is reached and a new instance is required, older instances are
+ * removed to allow creation of new ones without exceeding the browser's limit.
+ */
+#define MAX_INSTANCES 12000
+
+static int instances_global;
+
+/* Avoid overwrapping of begin/end pointers */
+#define INSTANCES_BUF_MAX (MAX_INSTANCES + 1)
+
+static __thread struct WasmInstanceInfo instances[INSTANCES_BUF_MAX];
+static __thread int instances_begin;
+static __thread int instances_end;
+
+static void add_instance(wasm_tb_func tb_func, void *tb_ptr)
+{
+    instances[instances_end].tb_func = tb_func;
+    instances[instances_end].tb_ptr = tb_ptr;
+    set_info_local(tb_ptr, &(instances[instances_end]));
+    instances_end  = (instances_end + 1) % INSTANCES_BUF_MAX;
+
+    qatomic_inc(&instances_global);
+}
+
+static __thread int instance_pending_gc;
+static __thread int instance_done_gc;
+
+static void remove_old_instances(void)
+{
+    int num;
+    if (instance_pending_gc > 0) {
+        return;
+    }
+    if (instances_begin <= instances_end) {
+        num = instances_end - instances_begin;
+    } else {
+        num = instances_end + (INSTANCES_BUF_MAX - instances_begin);
+    }
+    /* removes the half of the oldest instances in the buffer */
+    num /= 2;
+    for (int i = 0; i < num; i++) {
+        EM_ASM({ removeFunction($0); }, instances[instances_begin].tb_func);
+        instances[instances_begin].tb_ptr = NULL;
+        instances_begin = (instances_begin + 1) % INSTANCES_BUF_MAX;
+    }
+    instance_pending_gc += num;
+}
+
+static bool can_add_instance(void)
+{
+    return qatomic_read(&instances_global) < MAX_INSTANCES;
+}
+
+static wasm_tb_func get_instance_from_tb(void *tb_ptr)
+{
+    struct WasmInstanceInfo *elm = get_info_local(tb_ptr);
+    if (elm == NULL) {
+        return NULL;
+    }
+    if (elm->tb_ptr != tb_ptr) {
+        /*
+         * This TB was instantiated before, but has been removed. Set counter to
+         * the max value so that this will be instantiated.
+         */
+        set_counter_local(tb_ptr, INSTANTIATE_NUM);
+        set_info_local(tb_ptr, NULL);
+        return NULL;
+    }
+    return elm->tb_func;
+}
+
+static void check_gc_completion(void)
+{
+    if (instance_done_gc > 0) {
+        qatomic_sub(&instances_global, instance_done_gc);
+        instance_pending_gc -= instance_done_gc;
+        instance_done_gc = 0;
+    }
+}
+
+EM_JS_PRE(void, init_wasm_js, (void *instance_done_gc),
+{
+    Module.__wasm_tb = {
+        inst_gc_registry: new FinalizationRegistry((i) => {
+            if (i == "tbinstance") {
+                const memory_v = new DataView(HEAP8.buffer);
+                let v = memory_v.getInt32(DEC_PTR(instance_done_gc), true);
+                memory_v.setInt32(DEC_PTR(instance_done_gc), v + 1, true);
+            }
+        })
+    };
+});
+
+#define MAX_EXEC_NUM 50000
+static __thread int exec_cnt = MAX_EXEC_NUM;
+static inline void trysleep(void)
+{
+    /*
+     * Even during running TBs continuously, try to return the control
+     * to the browser periodically and allow browsers doing tasks.
+     */
+    if (--exec_cnt == 0) {
+        if (!can_add_instance()) {
+            emscripten_sleep(0);
+            check_gc_completion();
+        }
+        exec_cnt = MAX_EXEC_NUM;
+    }
+}
+
+static int thread_idx_max;
+
+static void init_wasm(void)
+{
+    thread_idx = qatomic_fetch_inc(&thread_idx_max);
+    ctx.stack = g_malloc(TCG_STATIC_CALL_ARGS_SIZE + TCG_STATIC_FRAME_SIZE);
+    ctx.buf128 = g_malloc(16);
+    ctx.tci_tb_ptr = (uint32_t *)&tci_tb_ptr;
+    init_wasm_js(&instance_done_gc);
+}
+
+static __thread bool initdone;
+
+uintptr_t tcg_qemu_tb_exec(CPUArchState *env, const void *v_tb_ptr)
+{
+    if (!initdone) {
+        init_wasm();
+        initdone = true;
+    }
+    ctx.env = env;
+    ctx.tb_ptr = (void *)v_tb_ptr;
+    while (true) {
+        trysleep();
+        uintptr_t res;
+        wasm_tb_func tb_func = get_instance_from_tb(ctx.tb_ptr);
+        if (tb_func) {
+            /*
+             * Call the Wasm instance
+             */
+            res = call_wasm_tb(tb_func, &ctx);
+        } else if (!inc_counter(ctx.tb_ptr)) {
+            /*
+             * Run it on TCI because the counter value is small
+             */
+            res = tcg_qemu_tb_exec_tci(env);
+        } else if (!can_add_instance()) {
+            /*
+             * Too many instances has been created, try removing older
+             * instances and keep running this TB on TCI
+             */
+            remove_old_instances();
+            check_gc_completion();
+            res = tcg_qemu_tb_exec_tci(env);
+        } else {
+            /*
+             * Instantiate and run the Wasm module
+             */
+            struct WasmTBHeader *header = (struct WasmTBHeader *)ctx.tb_ptr;
+            tb_func = (wasm_tb_func)instantiate_wasm(header->wasm_ptr,
+                                                     header->wasm_size,
+                                                     header->import_ptr,
+                                                     header->import_size);
+            add_instance(tb_func, ctx.tb_ptr);
+            res = call_wasm_tb(tb_func, &ctx);
+        }
+        if (!ctx.tb_ptr) {
+            return res;
         }
     }
 }
