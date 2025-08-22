@@ -28,6 +28,9 @@
 #include "qemu/queue.h"
 #include "../wasm.h"
 
+/* This is included to get the number of threads via tcg_max_ctxs. */
+#include "../tcg-internal.h"
+
 /* Used for function call generation. */
 #define TCG_TARGET_CALL_STACK_OFFSET 0
 #define TCG_TARGET_STACK_ALIGN       8
@@ -2295,6 +2298,11 @@ static void tcg_out_set_carry(TCGContext *s)
     g_assert_not_reached();
 }
 
+/* Generate global QEMU prologue and epilogue code. */
+static inline void tcg_target_qemu_prologue(TCGContext *s)
+{
+}
+
 static const uint8_t mod_1[] = {
     0x0, 0x61, 0x73, 0x6d, /* magic */
     0x01, 0x0, 0x0, 0x0,   /* version */
@@ -2443,6 +2451,7 @@ static int write_mod_code(TCGContext *s)
 
 static void tcg_out_tb_start(TCGContext *s)
 {
+    int size;
     intptr_t ofs;
     struct WasmTBHeader *h;
 
@@ -2456,6 +2465,18 @@ static void tcg_out_tb_start(TCGContext *s)
     /* TB starts from a header */
     h = (struct WasmTBHeader *)(s->code_ptr);
     s->code_ptr += sizeof(struct WasmTBHeader);
+
+    /* locate counters */
+    h->counter_ptr = (int32_t *)s->code_ptr;
+    size = tcg_max_ctxs * sizeof(int32_t);
+    memset(s->code_ptr, 0, size);
+    s->code_ptr += size;
+
+    /* locate the instance information */
+    h->info_ptr = (struct WasmInstanceInfo **)s->code_ptr;
+    size = tcg_max_ctxs * sizeof(void *);
+    memset(s->code_ptr, 0, size);
+    s->code_ptr += size;
 
     /* Followed by TCI code */
     h->tci_ptr = s->code_ptr;
