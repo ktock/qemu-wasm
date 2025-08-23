@@ -30,10 +30,21 @@ struct WasmContext {
      * Pointer to a stack array.
      */
     uint64_t *stack;
+
+    /*
+     * Flag indicating whether to initialize the block index(1) or not(0).
+     */
+    uint32_t do_init;
 };
 
 /* Instantiated Wasm function of a TB */
 typedef uintptr_t (*wasm_tb_func)(struct WasmContext *);
+
+static inline uintptr_t call_wasm_tb(wasm_tb_func f, struct WasmContext *ctx)
+{
+    ctx->do_init = 1; /* reset the block index (rewinding will skip this) */
+    return f(ctx);
+}
 
 /*
  * A TB of the Wasm backend starts from a header which contains pointers for

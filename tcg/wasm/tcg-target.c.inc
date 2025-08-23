@@ -152,7 +152,8 @@ static const uint8_t tcg_target_reg_index[TCG_TARGET_NB_REGS] = {
 #define CTX_IDX 0
 
 /* Function index */
-#define HELPER_IDX_START 0 /* The first index of helper functions */
+#define CHECK_UNWINDING_IDX 0 /* A function to check the Asyncify status */
+#define HELPER_IDX_START 1 /* The first index of helper functions */
 
 #define PTR_TYPE 0x7e
 
@@ -169,6 +170,7 @@ typedef enum {
     OPC_GLOBAL_GET = 0x23,
     OPC_GLOBAL_SET = 0x24,
 
+    OPC_I32_LOAD = 0x28,
     OPC_I64_LOAD = 0x29,
     OPC_I64_LOAD8_S = 0x30,
     OPC_I64_LOAD8_U = 0x31,
@@ -176,6 +178,7 @@ typedef enum {
     OPC_I64_LOAD16_U = 0x33,
     OPC_I64_LOAD32_S = 0x34,
     OPC_I64_LOAD32_U = 0x35,
+    OPC_I32_STORE = 0x36,
     OPC_I64_STORE = 0x37,
     OPC_I64_STORE8 = 0x3c,
     OPC_I64_STORE16 = 0x3d,
@@ -1116,6 +1119,17 @@ static int64_t get_helper_idx(TCGContext *s, intptr_t helper_idx_on_qemu)
     return -1;
 }
 
+static void tcg_wasm_out_handle_unwinding(TCGContext *s)
+{
+    tcg_wasm_out_op_idx(s, OPC_CALL, CHECK_UNWINDING_IDX);
+    tcg_wasm_out_op(s, OPC_I32_EQZ);
+    tcg_wasm_out_op_block(s, OPC_IF, BLOCK_NORET);
+    tcg_wasm_out_op_const(s, OPC_I64_CONST, 0);
+    /* returns if unwinding */
+    tcg_wasm_out_op(s, OPC_RETURN);
+    tcg_wasm_out_op(s, OPC_END);
+}
+
 static void tcg_wasm_out_call(TCGContext *s, intptr_t func,
                               const TCGHelperInfo *info)
 {
@@ -1132,7 +1146,16 @@ static void tcg_wasm_out_call(TCGContext *s, intptr_t func,
     tcg_wasm_out_op_const(s, OPC_I64_CONST, (uint64_t)s->code_ptr);
     tcg_wasm_out_op_ldst(s, OPC_I64_STORE, 0, ofs);
 
+    /*
+     * update the block index so that the possible rewinding will
+     * skip this block
+     */
+    tcg_wasm_out_op_const(s, OPC_I64_CONST, cur_block_idx + 1);
+    tcg_wasm_out_op_idx(s, OPC_GLOBAL_SET, BLOCK_IDX);
+    tcg_wasm_out_new_block(s);
+
     gen_call(s, info, func_idx);
+    tcg_wasm_out_handle_unwinding(s);
 }
 
 static void gen_func_type_qemu_ld(TCGContext *s, uint32_t oi)
@@ -1204,6 +1227,14 @@ static void tcg_wasm_out_qemu_ld(TCGContext *s, TCGReg data_reg,
         gen_func_type_qemu_ld(s, oi);
     }
 
+    /*
+     * update the block index so that the possible rewinding will
+     * skip this block
+     */
+    tcg_wasm_out_op_const(s, OPC_I64_CONST, cur_block_idx + 1);
+    tcg_wasm_out_op_idx(s, OPC_GLOBAL_SET, BLOCK_IDX);
+    tcg_wasm_out_new_block(s);
+
     /* call the target helper */
     tcg_wasm_out_op_idx(s, OPC_GLOBAL_GET, REG_IDX(TCG_AREG0));
     tcg_wasm_out_op_idx(s, OPC_GLOBAL_GET, REG_IDX(addr_reg));
@@ -1212,6 +1243,7 @@ static void tcg_wasm_out_qemu_ld(TCGContext *s, TCGReg data_reg,
 
     tcg_wasm_out_op_idx(s, OPC_CALL, func_idx);
     tcg_wasm_out_op_idx(s, OPC_GLOBAL_SET, REG_IDX(data_reg));
+    tcg_wasm_out_handle_unwinding(s);
 }
 
 static void *qemu_st_helper_ptr(uint32_t oi)
@@ -1245,6 +1277,14 @@ static void tcg_wasm_out_qemu_st(TCGContext *s, TCGReg data_reg,
         gen_func_type_qemu_st(s, oi);
     }
 
+    /*
+     * update the block index so that the possible rewinding will
+     * skip this block
+     */
+    tcg_wasm_out_op_const(s, OPC_I64_CONST, cur_block_idx + 1);
+    tcg_wasm_out_op_idx(s, OPC_GLOBAL_SET, BLOCK_IDX);
+    tcg_wasm_out_new_block(s);
+
     /* call the target helper */
     tcg_wasm_out_op_idx(s, OPC_GLOBAL_GET, REG_IDX(TCG_AREG0));
     tcg_wasm_out_op_idx(s, OPC_GLOBAL_GET, REG_IDX(addr_reg));
@@ -1261,6 +1301,7 @@ static void tcg_wasm_out_qemu_st(TCGContext *s, TCGReg data_reg,
     tcg_wasm_out_op_const(s, OPC_I64_CONST, (intptr_t)s->code_ptr);
 
     tcg_wasm_out_op_idx(s, OPC_CALL, func_idx);
+    tcg_wasm_out_handle_unwinding(s);
 }
 
 static void tcg_out_op_l(TCGContext *s, TCGOpcode op, TCGLabel *l0)
@@ -2264,6 +2305,9 @@ static const uint8_t mod_1[] = {
     0x60,                         /* 0: Type of "start" function */
     0x01, PTR_TYPE,               /* arg: ctx pointer */
     0x01, PTR_TYPE,               /* return: res */
+    0x60,                         /* 1: Type of the asyncify helper */
+    0x0,                          /* no argument */
+    0x01, 0x7f,                   /* return: res (i32) */
 };
 
 #define MOD_1_PH_TYPE_SECTION_SIZE_OFF 9
@@ -2289,6 +2333,9 @@ static const uint8_t mod_2[] = {
     0x02, 0x07,                               /* shared mem(64bit) */
     0x00, 0x80, 0x80, 0x10,                   /* min: 0, max: 262144 pages */
 #endif
+    0x06, 0x68, 0x65, 0x6c, 0x70, 0x65, 0x72, /* module: "helper" */
+    0x01, 0x75,                               /* name: "u" */
+    0x00, 0x01,                               /* func type 1 */
 };
 
 #define MOD_2_PH_IMPORT_SECTION_SIZE_OFF 1
@@ -2427,8 +2474,17 @@ static void tcg_out_tb_start(TCGContext *s)
     tcg_wasm_out_op_idx(s, OPC_GLOBAL_SET, REG_IDX(TCG_REG_CALL_STACK));
     tcg_wasm_out_op(s, OPC_END);
 
+    ofs = tcg_wasm_out_get_ctx(s, CTX_OFFSET(do_init));
+    tcg_wasm_out_op_ldst(s, OPC_I32_LOAD, 0, ofs);
+    tcg_wasm_out_op_const(s, OPC_I32_CONST, 0);
+    tcg_wasm_out_op(s, OPC_I32_NE);
+    tcg_wasm_out_op_block(s, OPC_IF, BLOCK_NORET);
     tcg_wasm_out_op_const(s, OPC_I64_CONST, 0);
     tcg_wasm_out_op_idx(s, OPC_GLOBAL_SET, BLOCK_IDX);
+    ofs = tcg_wasm_out_get_ctx(s, CTX_OFFSET(do_init));
+    tcg_wasm_out_op_const(s, OPC_I32_CONST, 0);
+    tcg_wasm_out_op_ldst(s, OPC_I32_STORE, 0, ofs);
+    tcg_wasm_out_op(s, OPC_END);
 
     tcg_wasm_out_op_block(s, OPC_LOOP, BLOCK_NORET);
     tcg_wasm_out_op_idx(s, OPC_GLOBAL_GET, BLOCK_IDX);
