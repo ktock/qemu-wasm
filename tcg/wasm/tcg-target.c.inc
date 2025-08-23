@@ -154,6 +154,8 @@ static const uint8_t tcg_target_reg_index[TCG_TARGET_NB_REGS] = {
 /* Function index */
 #define HELPER_IDX_START 0 /* The first index of helper functions */
 
+#define PTR_TYPE 0x7e
+
 typedef enum {
     OPC_UNREACHABLE = 0x00,
     OPC_LOOP = 0x03,
@@ -307,6 +309,19 @@ static int linked_buf_len(LinkedBuf *p)
     LinkedBufEntry *e;
 
     QSIMPLEQ_FOREACH(e, p, entry) {
+        total += e->size;
+    }
+    return total;
+}
+
+static int linked_buf_write(LinkedBuf *p, void *dst)
+{
+    int total = 0;
+    LinkedBufEntry *e;
+
+    QSIMPLEQ_FOREACH(e, p, entry) {
+        memcpy(dst, e->data, e->size);
+        dst += e->size;
         total += e->size;
     }
     return total;
@@ -928,6 +943,99 @@ static void gen_call(TCGContext *s,
     }
 }
 
+static __thread LinkedBuf types_buf;
+
+static void init_types_buf(void)
+{
+    QSIMPLEQ_INIT(&types_buf);
+}
+
+static void types_buf_out8(uint8_t v)
+{
+    linked_buf_out8(&types_buf, v);
+}
+
+static void gen_func_type_call(TCGContext *s, const TCGHelperInfo *info)
+{
+    unsigned typemask = info->typemask;
+    int rettype = typemask & 7;
+    uint32_t vec_size = 0;
+
+    if (rettype == dh_typecode_i128) {
+        vec_size++;
+    }
+    for (int m = typemask >> 3; m; m >>= 3) {
+        if ((m & 7) != dh_typecode_void) {
+            vec_size++;
+        }
+    }
+
+    types_buf_out8(0x60);
+    linked_buf_out_leb128(&types_buf, vec_size);
+
+    if (rettype == dh_typecode_i128) {
+        types_buf_out8(PTR_TYPE);
+    }
+
+    for (int m = typemask >> 3; m; m >>= 3) {
+        switch (m & 7) {
+        case dh_typecode_void:
+            break;
+        case dh_typecode_i32:
+        case dh_typecode_s32:
+            types_buf_out8(0x7f);
+            break;
+        case dh_typecode_i64:
+        case dh_typecode_s64:
+            types_buf_out8(0x7e);
+            break;
+        case dh_typecode_i128:
+            types_buf_out8(PTR_TYPE);
+            break;
+        case dh_typecode_ptr:
+            types_buf_out8(PTR_TYPE);
+            break;
+        default:
+            g_assert_not_reached();
+        }
+    }
+
+    switch (rettype) {
+    case dh_typecode_void:
+    case dh_typecode_i128:
+        types_buf_out8(0x0);
+        break;
+    case dh_typecode_i32:
+    case dh_typecode_s32:
+        types_buf_out8(0x1);
+        types_buf_out8(0x7f);
+        break;
+    case dh_typecode_i64:
+    case dh_typecode_s64:
+        types_buf_out8(0x1);
+        types_buf_out8(0x7e);
+        break;
+    case dh_typecode_ptr:
+        types_buf_out8(0x1);
+        types_buf_out8(PTR_TYPE);
+        break;
+    default:
+        g_assert_not_reached();
+    }
+}
+
+static __thread LinkedBuf imports_buf;
+
+static void init_imports_buf(void)
+{
+    QSIMPLEQ_INIT(&imports_buf);
+}
+
+static void imports_buf_out8(uint8_t v)
+{
+    linked_buf_out8(&imports_buf, v);
+}
+
 typedef struct HelperInfo {
     intptr_t idx_on_qemu;
     QSIMPLEQ_ENTRY(HelperInfo) entry;
@@ -944,13 +1052,54 @@ static void init_helpers(void)
 
 static uint32_t register_helper(TCGContext *s, intptr_t helper_idx_on_qemu)
 {
+    uint32_t typeidx = helper_idx + 1;
+    char buf[11]; /* enough for decimal int max + NULL*/
+    int n = snprintf(buf, sizeof(buf), "%d", helper_idx - HELPER_IDX_START);
+
     tcg_debug_assert(helper_idx_on_qemu >= 0);
 
     HelperInfo *e = tcg_malloc(sizeof(HelperInfo));
     e->idx_on_qemu = helper_idx_on_qemu;
     QSIMPLEQ_INSERT_TAIL(&helpers, e, entry);
 
+    tcg_debug_assert(n < sizeof(buf));
+    imports_buf_out8(6); /* helper */
+    imports_buf_out8(0x68);
+    imports_buf_out8(0x65);
+    imports_buf_out8(0x6c);
+    imports_buf_out8(0x70);
+    imports_buf_out8(0x65);
+    imports_buf_out8(0x72);
+    linked_buf_out_leb128(&imports_buf, (uint32_t)n);
+    for (int i = 0; i < n; i++) {
+        imports_buf_out8(buf[i]);
+    }
+    imports_buf_out8(0); /* type(0) */
+    linked_buf_out_leb128(&imports_buf, typeidx);
+
     return helper_idx++;
+}
+
+static int helpers_len(void)
+{
+    int n = 0;
+    HelperInfo *e;
+
+    QSIMPLEQ_FOREACH(e, &helpers, entry) {
+        n++;
+    }
+    return n;
+}
+
+static int helpers_write_to_array(intptr_t *dst)
+{
+    intptr_t *start = dst;
+    HelperInfo *e;
+
+    QSIMPLEQ_FOREACH(e, &helpers, entry) {
+        *dst++ = e->idx_on_qemu;
+    }
+    return (intptr_t)dst - (intptr_t)start;
 }
 
 static int64_t get_helper_idx(TCGContext *s, intptr_t helper_idx_on_qemu)
@@ -974,6 +1123,7 @@ static void tcg_wasm_out_call(TCGContext *s, intptr_t func,
     int64_t func_idx = get_helper_idx(s, func);
     if (func_idx < 0) {
         func_idx = register_helper(s, func);
+        gen_func_type_call(s, info);
     }
 
     ofs = tcg_wasm_out_get_ctx(s, CTX_OFFSET(tci_tb_ptr));
@@ -983,6 +1133,39 @@ static void tcg_wasm_out_call(TCGContext *s, intptr_t func,
     tcg_wasm_out_op_ldst(s, OPC_I64_STORE, 0, ofs);
 
     gen_call(s, info, func_idx);
+}
+
+static void gen_func_type_qemu_ld(TCGContext *s, uint32_t oi)
+{
+    types_buf_out8(0x60);
+    types_buf_out8(0x4);
+    types_buf_out8(PTR_TYPE);
+    types_buf_out8(0x7e);
+    types_buf_out8(0x7f);
+    types_buf_out8(PTR_TYPE);
+    types_buf_out8(0x1);
+    types_buf_out8(0x7e);
+}
+
+static void gen_func_type_qemu_st(TCGContext *s, uint32_t oi)
+{
+    MemOp mop = get_memop(oi);
+
+    types_buf_out8(0x60);
+    types_buf_out8(0x5);
+    types_buf_out8(PTR_TYPE);
+    types_buf_out8(0x7e);
+    switch (mop & MO_SSIZE) {
+    case MO_UQ:
+        types_buf_out8(0x7e);
+        break;
+    default:
+        types_buf_out8(0x7f);
+        break;
+    }
+    types_buf_out8(0x7f);
+    types_buf_out8(PTR_TYPE);
+    types_buf_out8(0x0);
 }
 
 static void *qemu_ld_helper_ptr(uint32_t oi)
@@ -1018,6 +1201,7 @@ static void tcg_wasm_out_qemu_ld(TCGContext *s, TCGReg data_reg,
     func_idx = get_helper_idx(s, helper_idx);
     if (func_idx < 0) {
         func_idx = register_helper(s, helper_idx);
+        gen_func_type_qemu_ld(s, oi);
     }
 
     /* call the target helper */
@@ -1058,6 +1242,7 @@ static void tcg_wasm_out_qemu_st(TCGContext *s, TCGReg data_reg,
     func_idx = get_helper_idx(s, helper_idx);
     if (func_idx < 0) {
         func_idx = register_helper(s, helper_idx);
+        gen_func_type_qemu_st(s, oi);
     }
 
     /* call the target helper */
@@ -2069,14 +2254,164 @@ static void tcg_out_set_carry(TCGContext *s)
     g_assert_not_reached();
 }
 
+static const uint8_t mod_1[] = {
+    0x0, 0x61, 0x73, 0x6d, /* magic */
+    0x01, 0x0, 0x0, 0x0,   /* version */
+
+    0x01,                         /* type section */
+    0x80, 0x80, 0x80, 0x80, 0x00, /* placehodler for size */
+    0x80, 0x80, 0x80, 0x80, 0x00, /* placehodler for num of types vec */
+    0x60,                         /* 0: Type of "start" function */
+    0x01, PTR_TYPE,               /* arg: ctx pointer */
+    0x01, PTR_TYPE,               /* return: res */
+};
+
+#define MOD_1_PH_TYPE_SECTION_SIZE_OFF 9
+#define MOD_1_PH_TYPE_VEC_NUM_OFF 14
+
+static const uint8_t mod_2[] = {
+    0x02,                                     /* import section */
+    0x80, 0x80, 0x80, 0x80, 0x00,             /* placehodler for size */
+    0x80, 0x80, 0x80, 0x80, 0x00,             /* placehodler for imports num */
+    0x03, 0x65, 0x6e, 0x76,                   /* module: "env" */
+    0x06, 0x6d, 0x65, 0x6d, 0x6f, 0x72, 0x79, /* name: "memory" */
+#if defined(WASM64_MEMORY64_2)
+    /* 32bit memory is used for Emscripten's "-sMEMORY64=2" configuration. */
+    0x02, 0x03,                               /* shared mem */
+    0x00, 0x80, 0x80, 0x04,                   /* min: 0, max: 65536 pages */
+#else
+    /*
+     * 64bit memory is used for Emscripten's "-sMEMORY64=1" configuration.
+     * Note: the maximum 64bit memory size of the engine implementations is
+     * limited to 262144 pages(16GiB)
+     * https://webassembly.github.io/memory64/js-api/#limits
+     */
+    0x02, 0x07,                               /* shared mem(64bit) */
+    0x00, 0x80, 0x80, 0x10,                   /* min: 0, max: 262144 pages */
+#endif
+};
+
+#define MOD_2_PH_IMPORT_SECTION_SIZE_OFF 1
+#define MOD_2_PH_IMPORT_VEC_NUM_OFF 6
+
+static const uint8_t mod_3[] = {
+    0x03,       /* function section */
+    2, 1, 0x00, /* function type 0 */
+
+    0x06,                         /* global section */
+    86,                           /* section size */
+    17,                           /* num of global vars */
+    0x7e, 0x01, 0x42, 0x00, 0x0b, /* 0-cleared 64bit var */
+    0x7e, 0x01, 0x42, 0x00, 0x0b, /* 0-cleared 64bit var */
+    0x7e, 0x01, 0x42, 0x00, 0x0b, /* 0-cleared 64bit var */
+    0x7e, 0x01, 0x42, 0x00, 0x0b, /* 0-cleared 64bit var */
+    0x7e, 0x01, 0x42, 0x00, 0x0b, /* 0-cleared 64bit var */
+    0x7e, 0x01, 0x42, 0x00, 0x0b, /* 0-cleared 64bit var */
+    0x7e, 0x01, 0x42, 0x00, 0x0b, /* 0-cleared 64bit var */
+    0x7e, 0x01, 0x42, 0x00, 0x0b, /* 0-cleared 64bit var */
+    0x7e, 0x01, 0x42, 0x00, 0x0b, /* 0-cleared 64bit var */
+    0x7e, 0x01, 0x42, 0x00, 0x0b, /* 0-cleared 64bit var */
+    0x7e, 0x01, 0x42, 0x00, 0x0b, /* 0-cleared 64bit var */
+    0x7e, 0x01, 0x42, 0x00, 0x0b, /* 0-cleared 64bit var */
+    0x7e, 0x01, 0x42, 0x00, 0x0b, /* 0-cleared 64bit var */
+    0x7e, 0x01, 0x42, 0x00, 0x0b, /* 0-cleared 64bit var */
+    0x7e, 0x01, 0x42, 0x00, 0x0b, /* 0-cleared 64bit var */
+    0x7e, 0x01, 0x42, 0x00, 0x0b, /* 0-cleared 64bit var */
+    0x7e, 0x01, 0x42, 0x00, 0x0b, /* 0-cleared 64bit var */
+
+    0x07,                               /* export section */
+    13,                                 /* size of section */
+    1,                                  /* num of funcs */
+    0x05, 0x73, 0x74, 0x61, 0x72, 0x74, /* "start" function */
+    0x00, 0x80, 0x80, 0x80, 0x80, 0x00, /* placeholder for func index*/
+
+    0x0a,                         /* code section */
+    0x80, 0x80, 0x80, 0x80, 0x00, /* placeholder for section size*/
+    1,                            /* num of codes */
+    0x80, 0x80, 0x80, 0x80, 0x00, /* placeholder for code size */
+    0x0,                          /* local variables (none) */
+};
+
+#define MOD_3_PH_EXPORT_START_FUNC_IDX 102
+#define MOD_3_PH_CODE_SECTION_SIZE_OFF 108
+#define MOD_3_PH_CODE_SIZE_OFF 114
+#define MOD_3_VARIABLES_SIZE 5
+#define MOD_3_CODE_SECTION_SIZE_ADD 11
+
+static void fill_uint32_leb128(uint8_t *b, uint32_t v)
+{
+    do {
+        *b |= v & 0x7f;
+        v >>= 7;
+        b++;
+    } while (v != 0);
+}
+
+typedef struct FillValueU32 {
+    int64_t offset;
+    uint32_t value;
+} FillValueU32;
+
+static int write_mod(TCGContext *s, const uint8_t mod[], int len,
+                     FillValueU32 values[], int values_len)
+{
+    void *base = s->code_ptr;
+
+    if (unlikely(((void *)s->code_ptr + len)
+                 > s->code_gen_highwater)) {
+        return -1;
+    }
+
+    memcpy(s->code_ptr, mod, len);
+    s->code_ptr += len;
+
+    for (int i = 0; i < values_len; i++) {
+        fill_uint32_leb128(base + values[i].offset, values[i].value);
+    }
+
+    return 0;
+}
+
+static int write_mod_code(TCGContext *s)
+{
+    void *base = s->code_ptr;
+    int code_size = sub_buf_len();
+    BlockPlaceholder *e;
+
+    if (unlikely(((void *)s->code_ptr + code_size) > s->code_gen_highwater)) {
+        return -1;
+    }
+    linked_buf_write(&sub_buf, s->code_ptr);
+    s->code_ptr += code_size;
+
+    QSIMPLEQ_FOREACH(e, &block_placeholder, entry) {
+        uint8_t *ph = e->pos + base;
+        int blk = get_block_of_label(e->label);
+        tcg_debug_assert(blk >= 0);
+        fill_uint32_leb128(ph, blk);
+    }
+
+    return 0;
+}
+
 static void tcg_out_tb_start(TCGContext *s)
 {
     intptr_t ofs;
+    struct WasmTBHeader *h;
 
     init_sub_buf();
     init_blocks();
     init_label_info();
     init_helpers();
+    init_types_buf();
+    init_imports_buf();
+
+    /* TB starts from a header */
+    h = (struct WasmTBHeader *)(s->code_ptr);
+    s->code_ptr += sizeof(struct WasmTBHeader);
+
+    /* Followed by TCI code */
+    h->tci_ptr = s->code_ptr;
 
     /* Initialize fundamental registers */
     tcg_wasm_out_op_idx(s, OPC_GLOBAL_GET, REG_IDX(TCG_AREG0));
@@ -2103,10 +2438,81 @@ static void tcg_out_tb_start(TCGContext *s)
 
 static int tcg_out_tb_end(TCGContext *s)
 {
+    int res;
+    struct WasmTBHeader *h = (struct WasmTBHeader *)(s->code_buf);
+
     tcg_wasm_out_op(s, OPC_END); /* end if */
     tcg_wasm_out_op(s, OPC_END); /* end loop */
     tcg_wasm_out_op(s, OPC_UNREACHABLE);
     tcg_wasm_out_op(s, OPC_END); /* end func */
+
+    /* write wasm blob */
+    h->wasm_ptr = s->code_ptr;
+
+    res = write_mod(s, mod_1, sizeof(mod_1), (FillValueU32[]) {
+            {
+                MOD_1_PH_TYPE_SECTION_SIZE_OFF,
+                linked_buf_len(&types_buf) +
+                sizeof(mod_1) - MOD_1_PH_TYPE_VEC_NUM_OFF
+            },
+            {
+                MOD_1_PH_TYPE_VEC_NUM_OFF,
+                HELPER_IDX_START + helpers_len() + 1/* start */
+            },
+    }, 2);
+    if (res < 0) {
+        return res;
+    }
+    s->code_ptr += linked_buf_write(&types_buf, s->code_ptr);
+
+    res = write_mod(s, mod_2, sizeof(mod_2), (FillValueU32[]) {
+            {
+                MOD_2_PH_IMPORT_SECTION_SIZE_OFF,
+                linked_buf_len(&imports_buf) +
+                sizeof(mod_2) - MOD_2_PH_IMPORT_VEC_NUM_OFF
+            },
+            {
+                MOD_2_PH_IMPORT_VEC_NUM_OFF,
+                HELPER_IDX_START + helpers_len() + 1/* memory */
+            },
+    }, 2);
+    if (res < 0) {
+        return res;
+    }
+    s->code_ptr += linked_buf_write(&imports_buf, s->code_ptr);
+
+    res = write_mod(s, mod_3, sizeof(mod_3), (FillValueU32[]) {
+            {
+                MOD_3_PH_EXPORT_START_FUNC_IDX,
+                HELPER_IDX_START + helpers_len()
+            },
+            {
+                MOD_3_PH_CODE_SECTION_SIZE_OFF,
+                sub_buf_len() + MOD_3_CODE_SECTION_SIZE_ADD
+            },
+            {
+                MOD_3_PH_CODE_SIZE_OFF,
+                sub_buf_len() + MOD_3_VARIABLES_SIZE
+            },
+    }, 3);
+    if (res < 0) {
+        return res;
+    }
+
+    res = write_mod_code(s);
+    if (res < 0) {
+        return res;
+    }
+    h->wasm_size = (intptr_t)s->code_ptr - (intptr_t)h->wasm_ptr;
+
+    /* record imported helper functions */
+    if (unlikely(((void *)s->code_ptr + helpers_len() * 4)
+                 > s->code_gen_highwater)) {
+        return -1;
+    }
+    h->import_ptr = s->code_ptr;
+    s->code_ptr += helpers_write_to_array((intptr_t *)s->code_ptr);
+    h->import_size = (intptr_t)s->code_ptr - (intptr_t)h->import_ptr;
 
     return 0;
 }
