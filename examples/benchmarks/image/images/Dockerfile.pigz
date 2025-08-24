@@ -1,0 +1,4 @@
+FROM ubuntu:24.04 AS dev
+RUN apt-get update && apt-get install -y pigz
+RUN head -c 10M </dev/urandom >data
+ENTRYPOINT ["/bin/sh", "-c", "echo '>>>>>*' ; pigz -c /data > /dev/null ; echo '<<<<<*'"]

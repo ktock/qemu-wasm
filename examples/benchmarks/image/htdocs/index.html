@@ -1,0 +1,75 @@
+<html>
+  <head>
+    <title>QEMU on browser</title>
+    <link rel="stylesheet" href="./vendor/xterm.css" />
+  </head>
+  <body>
+    <div id="terminal"></div>
+    <div id="result-duration"></div>
+    <script src="./load.js"></script>
+    <script type="module">
+      import 'https://unpkg.com/@xterm/xterm@5.5.0/lib/xterm.js';
+      import 'https://unpkg.com/xterm-pty/index.js';
+      import './module.js'
+      import initEmscriptenModule from './out.js';
+
+      let xterm = new Terminal();
+      xterm.open(document.getElementById("terminal"));
+
+      const { master, slave } = openpty();
+
+      xterm.loadAddon(master);
+
+      var startTime;
+      var startcnt = 0;
+      var stopcnt = 0;
+      var _write = slave.write;
+      slave.write = function(d) {
+          const s = new TextDecoder().decode(new Uint8Array(d));
+          //console.log(s);
+          if (s == ">") {
+              startcnt++;
+              return;
+          } else if (s == "<") {
+              stopcnt++;
+              return;
+          } else if ((s == "*") && (startcnt >= 5)) {
+              startTime = new Date();
+              console.log(JSON.stringify({
+                  time: startTime,
+                  message: "start timer",
+              }));
+              document.getElementById('result-duration').innerHTML = "measuring...";
+          } else if ((s == "*") && (stopcnt >= 5)) {
+              const endTime = new Date();
+              const seconds = (endTime.getTime() - startTime.getTime()) / 1000;
+              console.log(JSON.stringify({
+                  time: endTime,
+                  duration: seconds,
+                  message: "found wanted string",
+                  raw_string: s,
+              }));
+              document.getElementById('result-duration').innerHTML = seconds;
+          }
+          startcnt = 0;
+          stopcnt = 0;
+          _write.apply(slave, [d]);
+      }
+
+      Module.pty = slave;
+      Module['mainScriptUrlOrBlob'] = location.origin + location.pathname + "/out.js";
+      (async () => {
+          const instance = await initEmscriptenModule(Module);
+          
+          var oldPoll = Module['TTY'].stream_ops.poll;
+          var pty = Module['pty'];
+          Module['TTY'].stream_ops.poll = function(stream, timeout){
+              if (!pty.readable) {
+                  return (pty.readable ? 1 : 0) | (pty.writable ? 4 : 0);
+              }
+              return oldPoll.call(stream, timeout);
+          }
+      })();
+    </script>
+  </body>
+</html>
