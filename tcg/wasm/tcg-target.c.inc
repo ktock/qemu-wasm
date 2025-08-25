@@ -25,6 +25,10 @@
  * THE SOFTWARE.
  */
 
+#include "qemu/queue.h"
+
+typedef uint32_t tcg_insn_unit_tci;
+
 static const int tcg_target_reg_alloc_order[] = {
     TCG_REG_R2,
     TCG_REG_R3,
@@ -108,4 +112,160 @@ static bool patch_reloc(tcg_insn_unit *code_ptr, int type,
         return true;
     }
     return false;
+}
+
+/* converts a TCG register to a wasm variable index */
+static const uint8_t tcg_target_reg_index[TCG_TARGET_NB_REGS] = {
+    0,  /* TCG_REG_R0 */
+    1,  /* TCG_REG_R1 */
+    2,  /* TCG_REG_R2 */
+    3,  /* TCG_REG_R3 */
+    4,  /* TCG_REG_R4 */
+    5,  /* TCG_REG_R5 */
+    6,  /* TCG_REG_R6 */
+    7,  /* TCG_REG_R7 */
+    8,  /* TCG_REG_R8 */
+    9,  /* TCG_REG_R9 */
+    10, /* TCG_REG_R10 */
+    11, /* TCG_REG_R11 */
+    12, /* TCG_REG_R12 */
+    13, /* TCG_REG_R13 */
+    14, /* TCG_REG_R14 */
+    15, /* TCG_REG_R15 */
+};
+
+#define REG_IDX(r) tcg_target_reg_index[r]
+
+typedef enum {
+    OPC_GLOBAL_GET = 0x23,
+    OPC_GLOBAL_SET = 0x24,
+
+    OPC_I64_AND = 0x83,
+    OPC_I64_OR = 0x84,
+    OPC_I64_XOR = 0x85,
+} WasmInsn;
+
+#define BUF_SIZE 1024
+typedef struct LinkedBufEntry {
+    uint8_t data[BUF_SIZE];
+    uint32_t size;
+    QSIMPLEQ_ENTRY(LinkedBufEntry) entry;
+} LinkedBufEntry;
+
+typedef QSIMPLEQ_HEAD(, LinkedBufEntry) LinkedBuf;
+
+static void linked_buf_out8(LinkedBuf *linked_buf, uint8_t v)
+{
+    LinkedBufEntry *buf = QSIMPLEQ_LAST(linked_buf, LinkedBufEntry, entry);
+    if (!buf || (buf->size == BUF_SIZE)) {
+        LinkedBufEntry *e = tcg_malloc(sizeof(LinkedBufEntry));
+        e->size = 0;
+        QSIMPLEQ_INSERT_TAIL(linked_buf, e, entry);
+        buf = e;
+    }
+    buf->data[buf->size++] = v;
+}
+
+static void linked_buf_out_leb128(LinkedBuf *p, uint64_t v)
+{
+    uint8_t b;
+    do {
+        b = v & 0x7f;
+        v >>= 7;
+        if (v != 0) {
+            b |= 0x80;
+        }
+        linked_buf_out8(p, b);
+    } while (v != 0);
+}
+
+/*
+ * wasm code is generataed in the dynamically allocated buffer which
+ * are managed as a linked list.
+ */
+static __thread LinkedBuf sub_buf;
+
+static void init_sub_buf(void)
+{
+    QSIMPLEQ_INIT(&sub_buf);
+}
+static void tcg_wasm_out8(TCGContext *s, uint8_t v)
+{
+    linked_buf_out8(&sub_buf, v);
+}
+static void tcg_wasm_out_leb128(TCGContext *s, uint64_t v)
+{
+    linked_buf_out_leb128(&sub_buf, v);
+}
+
+static void tcg_wasm_out_op(TCGContext *s, WasmInsn opc)
+{
+    tcg_wasm_out8(s, opc);
+}
+static void tcg_wasm_out_op_idx(TCGContext *s, WasmInsn opc, uint32_t idx)
+{
+    tcg_wasm_out8(s, opc);
+    tcg_wasm_out_leb128(s, idx);
+}
+
+static void tcg_wasm_out_o1_i2(
+    TCGContext *s, WasmInsn opc, TCGReg ret, TCGReg arg1, TCGReg arg2)
+{
+    tcg_wasm_out_op_idx(s, OPC_GLOBAL_GET, REG_IDX(arg1));
+    tcg_wasm_out_op_idx(s, OPC_GLOBAL_GET, REG_IDX(arg2));
+    tcg_wasm_out_op(s, opc);
+    tcg_wasm_out_op_idx(s, OPC_GLOBAL_SET, REG_IDX(ret));
+}
+
+static void tcg_out_op_rrr(TCGContext *s, TCGOpcode op,
+                           TCGReg r0, TCGReg r1, TCGReg r2)
+{
+    tcg_insn_unit_tci insn = 0;
+
+    insn = deposit32(insn, 0, 8, op);
+    insn = deposit32(insn, 8, 4, r0);
+    insn = deposit32(insn, 12, 4, r1);
+    insn = deposit32(insn, 16, 4, r2);
+    tcg_out32(s, insn);
+}
+
+static void tgen_and(TCGContext *s, TCGType type,
+                     TCGReg a0, TCGReg a1, TCGReg a2)
+{
+    tcg_out_op_rrr(s, INDEX_op_and, a0, a1, a2);
+    tcg_wasm_out_o1_i2(s, OPC_I64_AND, a0, a1, a2);
+}
+
+static const TCGOutOpBinary outop_and = {
+    .base.static_constraint = C_O1_I2(r, r, r),
+    .out_rrr = tgen_and,
+};
+
+static void tgen_or(TCGContext *s, TCGType type,
+                     TCGReg a0, TCGReg a1, TCGReg a2)
+{
+    tcg_out_op_rrr(s, INDEX_op_or, a0, a1, a2);
+    tcg_wasm_out_o1_i2(s, OPC_I64_OR, a0, a1, a2);
+}
+
+static const TCGOutOpBinary outop_or = {
+    .base.static_constraint = C_O1_I2(r, r, r),
+    .out_rrr = tgen_or,
+};
+
+static void tgen_xor(TCGContext *s, TCGType type,
+                     TCGReg a0, TCGReg a1, TCGReg a2)
+{
+    tcg_out_op_rrr(s, INDEX_op_xor, a0, a1, a2);
+    tcg_wasm_out_o1_i2(s, OPC_I64_XOR, a0, a1, a2);
+}
+
+static const TCGOutOpBinary outop_xor = {
+    .base.static_constraint = C_O1_I2(r, r, r),
+    .out_rrr = tgen_xor,
+};
+
+static void tcg_out_tb_start(TCGContext *s)
+{
+    init_sub_buf();
 }

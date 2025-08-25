@@ -4003,6 +4003,7 @@ WebAssembly TCG target
 M: Kohei Tokunaga <ktokunaga.mail@gmail.com>
 S: Maintained
 F: tcg/wasm/
+F: tcg/wasm.c
 
 Block drivers
 -------------
