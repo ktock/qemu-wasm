@@ -88,3 +88,24 @@ static bool tcg_target_const_match(int64_t val, int ct,
 {
     return ct & TCG_CT_CONST;
 }
+
+static void tcg_out_nop_fill(tcg_insn_unit *p, int count)
+{
+    memset(p, 0, sizeof(*p) * count);
+}
+
+static bool patch_reloc(tcg_insn_unit *code_ptr, int type,
+                        intptr_t value, intptr_t addend)
+{
+    intptr_t diff = value - (intptr_t)(code_ptr + 4);
+
+    tcg_debug_assert(addend == 0);
+    tcg_debug_assert(type == 20);
+
+    if (diff == sextract32(diff, 0, type)) {
+        tcg_patch32(code_ptr,
+                    deposit32(*(uint32_t *)code_ptr, 32 - type, type, diff));
+        return true;
+    }
+    return false;
+}
