@@ -4004,6 +4004,7 @@ M: Kohei Tokunaga <ktokunaga.mail@gmail.com>
 S: Maintained
 F: tcg/wasm/
 F: tcg/wasm.c
+F: tcg/wasm.h
 
 Block drivers
 -------------
