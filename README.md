@@ -177,6 +177,14 @@ Each TB is translated to a Wasm module. One IR instruction is translated to the 
 
 Ideally, all TBs should be translated to Wasm modules, but compilation overhead slows down the execution, and browsers don't look like capable of creating thousands of modules. So QEMU Wasm enables both TCI (IR interpreter) and TCG. Only TBs that run many times (e.g. 1000) are compiled to Wasm.
 
+## Status of upstreaming
+
+Upstreaming WebAssembly host support to the QEMU project is currently in active development:
+
+- TCI (slow interpreter mode) for 32bit guests: Upstreamed in QEMU 10.1 (https://wiki.qemu.org/ChangeLog/10.1)
+- TCI (slow interpreter mode) for 64bit guests: Under discussion ([PATCH v3](https://patchew.org/QEMU/cover.1754534225.git.ktokunaga.mail@gmail.com/))
+- TCG (JIT mode): Under discussion ([PATCH v2](https://patchew.org/QEMU/cover.1756216429.git.ktokunaga.mail@gmail.com/))
+
 ## Additional Resources
 
 - [`./examples/`](./examples): Containeing examples and docs about networking, virtfs, migration, etc.
