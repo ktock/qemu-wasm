@@ -647,7 +647,7 @@ F: include/system/os-wasm.h
 F: os-wasm.c
 F: util/coroutine-wasm.c
 F: configs/meson/emscripten.txt
-F: tests/docker/dockerfiles/emsdk-wasm32-cross.docker
+F: tests/docker/dockerfiles/emsdk-wasm-cross.docker
 
 Alpha Machines
 --------------
@@ -3998,6 +3998,13 @@ S: Maintained
 F: tcg/tci/
 F: tcg/tci.c
 F: disas/tci.c
+
+WebAssembly TCG target
+M: Kohei Tokunaga <ktokunaga.mail@gmail.com>
+S: Maintained
+F: tcg/wasm/
+F: tcg/wasm.c
+F: tcg/wasm.h
 
 Block drivers
 -------------

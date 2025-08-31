@@ -386,3 +386,6 @@ option('rust', type: 'feature', value: 'disabled',
        description: 'Rust support')
 option('strict_rust_lints', type: 'boolean', value: false,
        description: 'Enable stricter set of Rust warnings')
+
+option('wasm64_32bit_address_limit', type: 'boolean', value: false,
+       description: 'Restrict wasm64 address space to 32-bit (default is to use the whole 64-bit range).')
