@@ -1,6 +1,6 @@
 # syntax = docker/dockerfile:1.5
 
-ARG EMSDK_VERSION_QEMU=3.1.50 # TODO: support recent version
+ARG EMSDK_VERSION_QEMU=4.0.1 # TODO: support recent version
 ARG ZLIB_VERSION=1.3.1
 ARG GLIB_MINOR_VERSION=2.75
 ARG GLIB_VERSION=${GLIB_MINOR_VERSION}.0
