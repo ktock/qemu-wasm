@@ -2165,6 +2165,13 @@ config_host_data.set('CONFIG_RDMA', rdma.found())
 config_host_data.set('CONFIG_RELOCATABLE', get_option('relocatable'))
 config_host_data.set('CONFIG_SAFESTACK', get_option('safe_stack'))
 config_host_data.set('CONFIG_SDL', sdl.found())
+
+# REQ-OIT-010: browser-canvas display backend.
+# Detected by probing for the Emscripten API header rather than by
+# compiler id, because `targetos` here comes from configure's uname and
+# reads 'linux' under emconfigure, so it cannot distinguish this build.
+wasm_display = cc.has_header('emscripten.h')
+config_host_data.set('CONFIG_WASM_DISPLAY', wasm_display)
 config_host_data.set('CONFIG_SDL_IMAGE', sdl_image.found())
 config_host_data.set('CONFIG_SECCOMP', seccomp.found())
 if seccomp.found()

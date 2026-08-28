@@ -1482,6 +1482,10 @@
 #
 # @dbus: Start a D-Bus service for the display.  (Since 7.0)
 #
+# @wasm: Render the guest display into an HTML canvas and forward
+#     browser keyboard and pointer events to the guest.  Only
+#     available in builds targeting WebAssembly via Emscripten.
+#
 # Since: 2.12
 ##
 { 'enum'    : 'DisplayType',
@@ -1494,7 +1498,8 @@
     { 'name': 'curses', 'if': 'CONFIG_CURSES' },
     { 'name': 'cocoa', 'if': 'CONFIG_COCOA' },
     { 'name': 'spice-app', 'if': 'CONFIG_SPICE' },
-    { 'name': 'dbus', 'if': 'CONFIG_DBUS_DISPLAY' }
+    { 'name': 'dbus', 'if': 'CONFIG_DBUS_DISPLAY' },
+    { 'name': 'wasm', 'if': 'CONFIG_WASM_DISPLAY' }
   ]
 }
 
