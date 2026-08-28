@@ -34,7 +34,7 @@ RUN mkdir -p $TARGET
 FROM build-base AS zlib-emscripten-dev
 ARG ZLIB_VERSION
 RUN mkdir -p /zlib
-RUN curl -Ls https://zlib.net/zlib-$ZLIB_VERSION.tar.xz | tar xJC /zlib --strip-components=1
+RUN curl -fLs https://zlib.net/fossils/zlib-$ZLIB_VERSION.tar.gz | tar xzC /zlib --strip-components=1
 WORKDIR /zlib
 RUN emconfigure ./configure --prefix=$TARGET --static
 RUN make install
