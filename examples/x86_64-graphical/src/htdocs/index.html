@@ -1,0 +1,59 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>QEMU on browser (x86_64, graphical)</title>
+<link rel="stylesheet" href="./vendor/xterm.css">
+<style>
+  body { margin: 0; background: #111; color: #ddd;
+         font: 13px ui-monospace, Menlo, monospace; }
+  #screen-wrap { display: flex; justify-content: center; background: #000; padding: 4px; }
+  /* The guest owns the pixels; do not let the browser resample them. */
+  #screen { image-rendering: pixelated; outline: none; border: 1px solid #333; }
+  #screen:focus { border-color: #58f; }
+  #terminal { padding: 4px; }
+  .label { color: #777; padding: 2px 6px; }
+</style>
+</head>
+<body>
+<div class="label">guest display &mdash; click to send keyboard and pointer here</div>
+<div id="screen-wrap"><canvas id="screen" width="720" height="400"></canvas></div>
+<div class="label">serial console</div>
+<div id="terminal"></div>
+
+<script src="./load.js"></script>
+<script type="module">
+import 'https://unpkg.com/xterm@5.3.0/lib/xterm.js';
+import 'https://unpkg.com/xterm-pty/index.js';
+import './module.js';
+import { QemuWasmDisplay } from './qemu-wasm-display.js';
+import initEmscriptenModule from './out.js';
+
+const xterm = new Terminal();
+xterm.open(document.getElementById('terminal'));
+const { master, slave } = openpty();
+xterm.loadAddon(master);
+Module.pty = slave;
+Module['mainScriptUrlOrBlob'] = location.origin + '/out.js';
+
+const display = new QemuWasmDisplay(document.getElementById('screen'));
+
+(async () => {
+  const instance = await initEmscriptenModule(Module);
+
+  const oldPoll = Module['TTY'].stream_ops.poll;
+  const pty = Module['pty'];
+  Module['TTY'].stream_ops.poll = function (stream, timeout) {
+    if (!pty.readable) {
+      return (pty.readable ? 1 : 0) | (pty.writable ? 4 : 0);
+    }
+    return oldPoll.call(stream, timeout);
+  };
+
+  // Must come after the module is up: the display needs the wasm heap and the
+  // exported functions, neither of which exist before this point.
+  display.attach(instance);
+})();
+</script>
+</body>
+</html>

@@ -133,6 +133,12 @@ if sdl.found()
   ui_modules += {'sdl' : sdl_ss}
 endif
 
+if wasm_display
+  # Linked into system_ss rather than registered in ui_modules: QEMU's
+  # module loader needs dlopen, and this is a static single-wasm build.
+  system_ss.add(pixman, glib, files('wasm.c'))
+endif
+
 if spice.found()
   spice_core_ss = ss.source_set()
   spice_core_ss.add(spice, pixman, files(
