@@ -62,8 +62,97 @@ static inline uint64_t host_dev_to_dotl_dev(dev_t dev)
 
 /* Translates errno from host -> Linux if needed */
 static inline int errno_to_dotl(int err) {
-#if defined(CONFIG_LINUX) || defined(EMSCRIPTEN)
+#if defined(CONFIG_LINUX)
     /* nothing to translate (Linux -> Linux) */
+#elif defined(EMSCRIPTEN)
+    /*
+     * Emscripten's libc uses WASI errno numbering (see <wasi/api.h>), which
+     * differs from Linux for every single code (WASI numbers are assigned
+     * alphabetically). Translate to Linux errnos for the 9p2000.L guest;
+     * fall back to EIO for anything unrecognized.
+     */
+    switch (err) {
+    case 0:
+        break;
+    case E2BIG: err = 7; break;
+    case EACCES: err = 13; break;
+    case EADDRINUSE: err = 98; break;
+    case EADDRNOTAVAIL: err = 99; break;
+    case EAFNOSUPPORT: err = 97; break;
+    case EAGAIN: err = 11; break;
+    case EALREADY: err = 114; break;
+    case EBADF: err = 9; break;
+    case EBADMSG: err = 74; break;
+    case EBUSY: err = 16; break;
+    case ECANCELED: err = 125; break;
+    case ECHILD: err = 10; break;
+    case ECONNABORTED: err = 103; break;
+    case ECONNREFUSED: err = 111; break;
+    case ECONNRESET: err = 104; break;
+    case EDEADLK: err = 35; break;
+    case EDESTADDRREQ: err = 89; break;
+    case EDOM: err = 33; break;
+    case EDQUOT: err = 122; break;
+    case EEXIST: err = 17; break;
+    case EFAULT: err = 14; break;
+    case EFBIG: err = 27; break;
+    case EHOSTUNREACH: err = 113; break;
+    case EIDRM: err = 43; break;
+    case EILSEQ: err = 84; break;
+    case EINPROGRESS: err = 115; break;
+    case EINTR: err = 4; break;
+    case EINVAL: err = 22; break;
+    case EIO: err = 5; break;
+    case EISCONN: err = 106; break;
+    case EISDIR: err = 21; break;
+    case ELOOP: err = 40; break;
+    case EMFILE: err = 24; break;
+    case EMLINK: err = 31; break;
+    case EMSGSIZE: err = 90; break;
+    case EMULTIHOP: err = 72; break;
+    case ENAMETOOLONG: err = 36; break;
+    case ENETDOWN: err = 100; break;
+    case ENETRESET: err = 102; break;
+    case ENETUNREACH: err = 101; break;
+    case ENFILE: err = 23; break;
+    case ENOBUFS: err = 105; break;
+    case ENODEV: err = 19; break;
+    case ENOENT: err = 2; break;
+    case ENOEXEC: err = 8; break;
+    case ENOLCK: err = 37; break;
+    case ENOLINK: err = 67; break;
+    case ENOMEM: err = 12; break;
+    case ENOMSG: err = 42; break;
+    case ENOPROTOOPT: err = 92; break;
+    case ENOSPC: err = 28; break;
+    case ENOSYS: err = 38; break;
+    case ENOTCONN: err = 107; break;
+    case ENOTDIR: err = 20; break;
+    case ENOTEMPTY: err = 39; break;
+    case ENOTRECOVERABLE: err = 131; break;
+    case ENOTSOCK: err = 88; break;
+    case ENOTSUP: err = 95; break;
+    case ENOTTY: err = 25; break;
+    case ENXIO: err = 6; break;
+    case EOVERFLOW: err = 75; break;
+    case EOWNERDEAD: err = 130; break;
+    case EPERM: err = 1; break;
+    case EPIPE: err = 32; break;
+    case EPROTO: err = 71; break;
+    case EPROTONOSUPPORT: err = 93; break;
+    case EPROTOTYPE: err = 91; break;
+    case ERANGE: err = 34; break;
+    case EROFS: err = 30; break;
+    case ESPIPE: err = 29; break;
+    case ESRCH: err = 3; break;
+    case ESTALE: err = 116; break;
+    case ETIMEDOUT: err = 110; break;
+    case ETXTBSY: err = 26; break;
+    case EXDEV: err = 18; break;
+    default:
+        err = 5; /* ==EIO on Linux */
+        break;
+    }
 #elif defined(CONFIG_DARWIN)
     /*
      * translation mandatory for macOS hosts
