@@ -39,7 +39,10 @@ int print_insn_tci(bfd_vma addr, disassemble_info *info)
 }
 
 EM_JS(int, instantiate_wasm, (), {
-        const memory_v = new DataView(HEAP8.buffer);
+        /* wasmMemory.buffer is always current, even mid-growth; a captured
+           HEAP8 view can be stale and silently truncate TB reads. */
+        const memory_b = wasmMemory.buffer;
+        const memory_v = new DataView(memory_b);
 
         const tb_ptr = memory_v.getInt32(Module.__wasm32_tb.tb_ptr_ptr, true);
         const export_vec_size = memory_v.getInt32(tb_ptr + 4, true);
@@ -57,7 +60,7 @@ EM_JS(int, instantiate_wasm, (), {
 
         // Create a full copy of the bytes instead of a subarray view to fix Firefox compatibility
         // See: https://bugzilla.mozilla.org/show_bug.cgi?id=1965217
-        const wasmBytes = new Uint8Array(HEAP8.slice(wasm_begin, wasm_begin + wasm_size));
+        const wasmBytes = new Uint8Array(memory_b.slice(wasm_begin, wasm_begin + wasm_size));
         
         var helper = {};
         for (var i = 0; i < import_vec_size / 4; i++) {
@@ -86,7 +89,7 @@ __thread int all_cores_num = -1;
 int cur_core_num_max = 0;
 
 EM_JS(void, remove_module_js, (), {
-        const memory_v = new DataView(HEAP8.buffer);
+        const memory_v = new DataView(wasmMemory.buffer);
         const remove_n = memory_v.getInt32(Module.__wasm32_tb.to_remove_instance_idx_ptr, true);
         for (var i = 0; i < remove_n * 4; i += 4) {
             removeFunction(memory_v.getInt32(Module.__wasm32_tb.to_remove_instance_ptr + i, true));
@@ -239,7 +242,7 @@ EM_JS(void, init_wasm32_js, (int tb_ptr_ptr, int cur_core_num, int to_remove_ins
             instance_garbage_collected_ptr: instance_garbage_collected_ptr,
             inst_gc_registry: new FinalizationRegistry((i) => {
                     if (i == "instance") {
-                        const memory_v = new DataView(HEAP8.buffer);
+                        const memory_v = new DataView(wasmMemory.buffer);
                         let v = memory_v.getInt32(Module.__wasm32_tb.instance_garbage_collected_ptr, true);
                         memory_v.setInt32(Module.__wasm32_tb.instance_garbage_collected_ptr, v + 1, true);
                     }
