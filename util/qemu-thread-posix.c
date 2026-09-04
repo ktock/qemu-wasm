@@ -11,6 +11,12 @@
  *
  */
 #include "qemu/osdep.h"
+#include "qemu/units.h"
+
+#if defined(EMSCRIPTEN)
+#define EMSCRIPTEN_THREAD_STACK_SIZE (2 * MiB)
+#endif
+
 #include "qemu/thread.h"
 #include "qemu/atomic.h"
 #include "qemu/notify.h"
@@ -559,6 +565,22 @@ void qemu_thread_create(QemuThread *thread, const char *name,
     if (err) {
         error_exit(err, __func__);
     }
+
+#if defined(EMSCRIPTEN)
+    /*
+     * Emscripten gives a new thread a 64KB wasm shadow stack by default, laid
+     * out directly above the thread's own TLS block with no guard page.  The
+     * synchronous block-layer paths device emulation takes from a vCPU
+     * thread (blk_pread under AIO_WAIT_WHILE: aio_poll, bottom halves,
+     * coroutine entry) need a few hundred KB, and an overflow silently
+     * corrupts the TLS.  Linear memory is committed, not reserved, so keep
+     * the request moderate.
+     */
+    err = pthread_attr_setstacksize(&attr, EMSCRIPTEN_THREAD_STACK_SIZE);
+    if (err) {
+        error_exit(err, __func__);
+    }
+#endif
 
     if (mode == QEMU_THREAD_DETACHED) {
         pthread_attr_setdetachstate(&attr, PTHREAD_CREATE_DETACHED);
