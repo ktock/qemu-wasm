@@ -44,6 +44,13 @@ typedef struct {
 QEMU_DEFINE_STATIC_CO_TLS(Coroutine *, current);
 QEMU_DEFINE_STATIC_CO_TLS(CoroutineEmscripten *, leader);
 size_t leader_asyncify_stack_size = COROUTINE_STACK_SIZE;
+/*
+ * Asyncify only stores the wasm locals of the frames being unwound, so a
+ * coroutine's buffer needs a few KB in practice; 256KB leaves a wide margin
+ * while keeping a pooled coroutine at ~1.25MB of committed wasm memory
+ * instead of 2MB (there is no lazy commit in linear memory).
+ */
+#define COROUTINE_ASYNCIFY_STACK_SIZE (256 << 10)
 
 static void coroutine_trampoline(void *co_)
 {
@@ -64,7 +71,7 @@ Coroutine *qemu_coroutine_new(void)
     co->stack_size = COROUTINE_STACK_SIZE;
     co->stack = qemu_alloc_stack(&co->stack_size);
 
-    co->asyncify_stack_size = COROUTINE_STACK_SIZE;
+    co->asyncify_stack_size = COROUTINE_ASYNCIFY_STACK_SIZE;
     co->asyncify_stack = g_malloc0(co->asyncify_stack_size);
     emscripten_fiber_init(&co->fiber, coroutine_trampoline, &co->base,
                           co->stack, co->stack_size, co->asyncify_stack, co->asyncify_stack_size);
