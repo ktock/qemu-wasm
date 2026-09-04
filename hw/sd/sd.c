@@ -115,6 +115,12 @@ struct SDState {
 
     uint8_t spec_version;
     BlockBackend *blk;
+    /*
+     * Cached blk_is_inserted(): the wrapper enters a coroutine, and the
+     * byte-level transfer paths used to query it once per byte.  Refreshed
+     * at realize and on every media change.
+     */
+    bool blk_inserted;
 
     /* Runtime changeables */
 
@@ -643,6 +649,7 @@ static void sd_cardchange(void *opaque, bool load, Error **errp)
     bool inserted = sd_get_inserted(sd);
     bool readonly = sd_get_readonly(sd);
 
+    sd->blk_inserted = inserted;
     if (inserted) {
         trace_sdcard_inserted(readonly);
         sd_reset(dev);
@@ -1745,7 +1752,7 @@ int sd_do_command(SDState *sd, SDRequest *req,
     sd_rsp_type_t rtype;
     int rsplen;
 
-    if (!sd->blk || !blk_is_inserted(sd->blk) || !sd->enable) {
+    if (!sd->blk_inserted || !sd->enable) {
         return 0;
     }
 
@@ -1852,7 +1859,7 @@ void sd_write_byte(SDState *sd, uint8_t value)
 {
     int i;
 
-    if (!sd->blk || !blk_is_inserted(sd->blk) || !sd->enable)
+    if (!sd->blk_inserted || !sd->enable)
         return;
 
     if (sd->state != sd_receivingdata_state) {
@@ -2006,7 +2013,7 @@ uint8_t sd_read_byte(SDState *sd)
     uint8_t ret;
     uint32_t io_len;
 
-    if (!sd->blk || !blk_is_inserted(sd->blk) || !sd->enable)
+    if (!sd->blk_inserted || !sd->enable)
         return 0x00;
 
     if (sd->state != sd_sendingdata_state) {
@@ -2239,6 +2246,7 @@ static void sd_realize(DeviceState *dev, Error **errp)
         }
         blk_set_dev_ops(sd->blk, &sd_block_ops, sd);
     }
+    sd->blk_inserted = sd_get_inserted(sd);
 }
 
 static Property sd_properties[] = {
