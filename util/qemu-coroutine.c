@@ -28,7 +28,12 @@
  */
 enum {
     POOL_MIN_BATCH_SIZE = 64,
+#if defined(EMSCRIPTEN)
+    /* Linear memory is committed, not reserved: an idle stack is not free. */
+    POOL_INITIAL_MAX_SIZE = 16,
+#else
     POOL_INITIAL_MAX_SIZE = 64,
+#endif
 };
 
 /** Free list to speed up creation */
