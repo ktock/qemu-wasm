@@ -885,7 +885,8 @@ static void tcg_wasm_out_clz64(TCGContext *s, TCGReg ret, TCGReg arg1, TCGReg ar
 
 static void tcg_wasm_out_clz32(TCGContext *s, TCGReg ret, TCGReg arg1, TCGReg arg2){
     tcg_wasm_out_op_global_get_r(s, arg1);
-    tcg_wasm_out_op_i64_eqz(s);
+    tcg_wasm_out_op_i32_wrap_i64(s);
+    tcg_wasm_out_op_i32_eqz(s);
     tcg_wasm_out_op_if_ret_i32(s);
     tcg_wasm_out_op_global_get_r(s, arg2);
     tcg_wasm_out_op_i32_wrap_i64(s);
@@ -912,7 +913,8 @@ static void tcg_wasm_out_ctz64(TCGContext *s, TCGReg ret, TCGReg arg1, TCGReg ar
 
 static void tcg_wasm_out_ctz32(TCGContext *s, TCGReg ret, TCGReg arg1, TCGReg arg2){
     tcg_wasm_out_op_global_get_r(s, arg1);
-    tcg_wasm_out_op_i64_eqz(s);
+    tcg_wasm_out_op_i32_wrap_i64(s);
+    tcg_wasm_out_op_i32_eqz(s);
     tcg_wasm_out_op_if_ret_i32(s);
     tcg_wasm_out_op_global_get_r(s, arg2);
     tcg_wasm_out_op_i32_wrap_i64(s);
@@ -1384,6 +1386,39 @@ static void tcg_wasm_out_movcond_i64(TCGContext *s, TCGCond cond, TCGReg ret,
     tcg_wasm_out_op_global_set_r(s, ret);
 }
 
+/*
+ * add2_i32/sub2_i32: the upper 32 bits of i32 registers are undefined.
+ * Compute ((ah op bh) << 32) + zext(al) op zext(bl) in one i64, which shifts
+ * the undefined bits of ah/bh out, and take the carry or borrow from bit 32.
+ */
+static void tcg_wasm_out_addsub2_i32(TCGContext *s, bool sub, TCGReg retl,
+                                     TCGReg reth, TCGReg al, TCGReg ah,
+                                     TCGReg bl, TCGReg bh)
+{
+    tcg_wasm_out_op_global_get_r(s, ah);
+    tcg_wasm_out_op_global_get_r(s, bh);
+    if (sub) {
+        tcg_wasm_out_op_i64_sub(s);
+    } else {
+        tcg_wasm_out_op_i64_add(s);
+    }
+    tcg_wasm_out_op_i64_const(s, 32);
+    tcg_wasm_out_op_i64_shl(s);
+    tcg_wasm_out_op_global_get_r(s, al);
+    tcg_wasm_out_op_i32_wrap_i64(s);
+    tcg_wasm_out_op_i64_extend_i32_u(s);
+    tcg_wasm_out_op_i64_add(s);
+    tcg_wasm_out_op_global_get_r(s, bl);
+    tcg_wasm_out_op_i32_wrap_i64(s);
+    tcg_wasm_out_op_i64_extend_i32_u(s);
+    if (sub) {
+        tcg_wasm_out_op_i64_sub(s);
+    } else {
+        tcg_wasm_out_op_i64_add(s);
+    }
+    tcg_wasm_out_op_set_r_as_i64(s, retl, reth);
+}
+
 static void tcg_wasm_out_add2(TCGContext *s, TCGReg retl, TCGReg reth,
                              TCGReg al, TCGReg ah, TCGReg bl, TCGReg bh)
 {
@@ -1443,6 +1478,7 @@ static void tcg_wasm_out_sub2(TCGContext *s, TCGReg retl, TCGReg reth,
         tcg_wasm_out_op_local_get(s, TMP64_0_IDX);
         tcg_wasm_out_op_global_get_r(s, al);
         tcg_wasm_out_op_i64_gt_u(s);
+        tcg_wasm_out_op_i64_extend_i32_u(s);
 
         tcg_wasm_out_op_local_get(s, TMP64_0_IDX);
         tcg_wasm_out_op_global_set_r(s, retl);
@@ -1452,6 +1488,7 @@ static void tcg_wasm_out_sub2(TCGContext *s, TCGReg retl, TCGReg reth,
         tcg_wasm_out_op_global_get_r(s, retl);
         tcg_wasm_out_op_global_get_r(s, al);
         tcg_wasm_out_op_i64_gt_u(s);
+        tcg_wasm_out_op_i64_extend_i32_u(s);
     }
 
     tcg_wasm_out_op_i64_sub(s);
@@ -1461,7 +1498,11 @@ static void tcg_wasm_out_sub2(TCGContext *s, TCGReg retl, TCGReg reth,
 static void tcg_wasm_out_mulu2_i32(TCGContext *s, TCGReg retl, TCGReg reth, TCGReg arg1, TCGReg arg2)
 {
     tcg_wasm_out_op_global_get_r(s, arg1);
+    tcg_wasm_out_op_i32_wrap_i64(s);
+    tcg_wasm_out_op_i64_extend_i32_u(s);
     tcg_wasm_out_op_global_get_r(s, arg2);
+    tcg_wasm_out_op_i32_wrap_i64(s);
+    tcg_wasm_out_op_i64_extend_i32_u(s);
     tcg_wasm_out_op_i64_mul(s);
     tcg_wasm_out_op_set_r_as_i64(s, retl, reth);
 }
@@ -1469,7 +1510,11 @@ static void tcg_wasm_out_mulu2_i32(TCGContext *s, TCGReg retl, TCGReg reth, TCGR
 static void tcg_wasm_out_muls2_i32(TCGContext *s, TCGReg retl, TCGReg reth, TCGReg arg1, TCGReg arg2)
 {
     tcg_wasm_out_op_global_get_r(s, arg1);
+    tcg_wasm_out_op_i32_wrap_i64(s);
+    tcg_wasm_out_op_i64_extend_i32_s(s);
     tcg_wasm_out_op_global_get_r(s, arg2);
+    tcg_wasm_out_op_i32_wrap_i64(s);
+    tcg_wasm_out_op_i64_extend_i32_s(s);
     tcg_wasm_out_op_i64_mul(s);
     tcg_wasm_out_op_set_r_as_i64(s, retl, reth);
 }
@@ -1501,6 +1546,7 @@ static void tcg_wasm_out_ctpop_i32(TCGContext *s, TCGReg dest, TCGReg src)
     tcg_wasm_out_op_global_get_r(s, src);
     tcg_wasm_out_op_i32_wrap_i64(s);
     tcg_wasm_out_op_i32_popcnt(s);
+    tcg_wasm_out_op_i64_extend_i32_u(s);
     tcg_wasm_out_op_global_set_r(s, dest);
 }
 
@@ -1554,9 +1600,7 @@ static void tcg_wasm_out_extract(TCGContext *s, TCGReg dest, TCGReg arg1, int po
 {
     int rs;
     switch (type) {
-    case TCG_TYPE_I32:
-        rs = 32 - len;
-        break;
+    case TCG_TYPE_I32: /* i64 shifts: also clears the undefined upper half */
     case TCG_TYPE_I64:
         rs = 64 - len;
         break;
@@ -3279,13 +3323,21 @@ static void tcg_out_add2(TCGContext *s, TCGOpcode opc, TCGReg retl, TCGReg reth,
                          TCGReg al, TCGReg ah, TCGReg bl, TCGReg bh)
 {
     tcg_tci_out_op_rrrrrr(s, opc, retl, reth, al, ah, bl, bh);
-    tcg_wasm_out_add2(s, retl, reth, al, ah, bl, bh);
+    if (opc == INDEX_op_add2_i32) {
+        tcg_wasm_out_addsub2_i32(s, false, retl, reth, al, ah, bl, bh);
+    } else {
+        tcg_wasm_out_add2(s, retl, reth, al, ah, bl, bh);
+    }
 }
 static void tcg_out_sub2(TCGContext *s, TCGOpcode opc, TCGReg retl, TCGReg reth,
                          TCGReg al, TCGReg ah, TCGReg bl, TCGReg bh)
 {
     tcg_tci_out_op_rrrrrr(s, opc, retl, reth, al, ah, bl, bh);
-    tcg_wasm_out_sub2(s, retl, reth, al, ah, bl, bh);
+    if (opc == INDEX_op_sub2_i32) {
+        tcg_wasm_out_addsub2_i32(s, true, retl, reth, al, ah, bl, bh);
+    } else {
+        tcg_wasm_out_sub2(s, retl, reth, al, ah, bl, bh);
+    }
 }
 static void tcg_out_mulu2_i32(TCGContext *s, TCGOpcode opc, TCGReg retl, TCGReg reth, TCGReg arg1, TCGReg arg2)
 {
